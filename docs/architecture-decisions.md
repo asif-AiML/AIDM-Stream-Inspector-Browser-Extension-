@@ -73,3 +73,34 @@ Development must separate two concerns:
 2. only later introduce target-tab selection/filtering.
 
 This prevents target-selection logic from hiding bugs in basic tab association.
+
+## AD-007 — M2 tab association verified across Firefox and Chromium
+
+Milestone M2 was manually tested successfully in both Firefox and Brave/Chromium.
+
+Observed behavior:
+
+- normal requests from the same tab consistently carried the same `tabId`;
+- requests from a different tab carried a different `tabId`;
+- some requests reported `tabId = -1`, meaning they were not associated with a normal browser tab;
+- Firefox displayed small tab IDs during testing, while Brave/Chromium displayed much larger numeric IDs.
+
+Tab IDs are opaque browser-provided identifiers. The extension must not assume that they are sequential, small, stable across browser restarts, or otherwise meaningful beyond identifying a tab within the current browser runtime.
+
+The current observer also logs HTTP request methods such as GET, HEAD, and POST. These are ordinary request methods and are useful development context, not separate media classifications.
+
+## AD-008 — Cross-browser MV3 background manifest warning in Chromium
+
+The shared Manifest V3 manifest currently declares both `background.scripts` and `background.service_worker` so one source tree can support Firefox and Chromium background models.
+
+Current browser behavior:
+
+- Firefox uses `background.scripts` and does not support the Chromium extension service-worker model for this purpose;
+- Chromium uses `background.service_worker` for Manifest V3;
+- Chromium 121 and later ignore `background.scripts` when it is present in a Manifest V3 extension, but Chromium-based browsers may still display a developer warning such as `'background.scripts' requires manifest version of 2 or lower.`
+
+This warning was observed in Brave during M2 testing while the extension still loaded and worked correctly.
+
+For the current development phase, the warning is accepted as a known cross-browser manifest-development warning rather than introducing separate browser-specific manifests or a build pipeline prematurely.
+
+If packaging/store submission later requires cleaner browser-specific manifests, that decision should be revisited at release-engineering time rather than during early feature development.
