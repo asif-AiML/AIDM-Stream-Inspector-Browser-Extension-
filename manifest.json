@@ -3,8 +3,13 @@
   "name": "AIDM Stream Inspector",
   "version": "0.1.0",
   "description": "Browser-side media stream inspector for AIDM.",
+  "permissions": ["webRequest"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
-    "scripts": ["src/background/background.js"],
+    "scripts": [
+      "src/background/network-observer.js",
+      "src/background/background.js"
+    ],
     "service_worker": "src/background/background.js"
   }
 }
