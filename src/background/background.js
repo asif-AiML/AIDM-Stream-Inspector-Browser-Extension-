@@ -61,10 +61,20 @@ function updateFocusedWindow(windowId) {
 }
 
 function handleTabActivated(activeInfo) {
-  if (activeInfo.windowId === focusedNormalWindowId) {
-    focusUpdateId += 1;
+  const updateId = ++focusUpdateId;
+
+  chrome.windows.get(activeInfo.windowId, {}, (browserWindow) => {
+    if (chrome.runtime.lastError || updateId !== focusUpdateId) {
+      return;
+    }
+
+    if (!browserWindow.focused || browserWindow.type !== "normal") {
+      return;
+    }
+
+    focusedNormalWindowId = activeInfo.windowId;
     setCurrentTargetTabId(activeInfo.tabId);
-  }
+  });
 }
 
 function initializeTargetTab() {
