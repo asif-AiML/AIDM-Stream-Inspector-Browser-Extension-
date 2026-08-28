@@ -1,9 +1,11 @@
 function logObservedRequest(details) {
-  const tabContext = details.tabId >= 0
-    ? `tab ${details.tabId}`
-    : `no tab (${details.tabId})`;
+  const targetTabId = globalThis.getCurrentTargetTabId();
 
-  console.log(`[AIDM Network][${tabContext}] ${details.method} ${details.url}`);
+  if (details.tabId !== targetTabId) {
+    return;
+  }
+
+  console.log(`[AIDM Target][tab ${details.tabId}] ${details.method} ${details.url}`);
 }
 
 chrome.webRequest.onBeforeRequest.addListener(logObservedRequest, {
