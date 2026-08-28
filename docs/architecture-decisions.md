@@ -104,3 +104,30 @@ This warning was observed in Brave during M2 testing while the extension still l
 For the current development phase, the warning is accepted as a known cross-browser manifest-development warning rather than introducing separate browser-specific manifests or a build pipeline prematurely.
 
 If packaging/store submission later requires cleaner browser-specific manifests, that decision should be revisited at release-engineering time rather than during early feature development.
+
+## AD-009 — M3.1 target reconstruction after Chromium service-worker restart
+
+M3 initially revealed a Chromium-specific lifecycle bug: `tabs.onActivated` was registered correctly at top level, but the handler depended on previously initialized in-memory `focusedNormalWindowId`. After a service-worker restart, that value could be `null`, causing the activation event that woke the worker to be rejected.
+
+M3.1 changed target reconstruction so fresh browser state can establish the focused normal window and active target tab after a Chromium service-worker restart, while preserving Firefox behavior.
+
+Manual testing after M3.1 showed:
+
+- Firefox retained its immediate and reliable target-tab behavior;
+- Brave/Chromium began updating target tabs immediately on ordinary tab switches;
+- the prior need to unfocus/refocus Brave to recover the correct target was removed.
+
+This confirms that important target state must be reconstructable from browser events/current browser APIs rather than assuming background global memory survived.
+
+## AD-010 — Chromium focus-loss timing differs from Firefox and is not a current product blocker
+
+After M3.1, one smaller cross-browser difference remains during application/window focus loss:
+
+- Firefox immediately reports the target as unavailable when the user leaves the Firefox window;
+- Brave/Chromium may temporarily retain the previous target when the browser loses application focus, then briefly report unavailable when focus returns before immediately reconstructing the active target tab.
+
+Chromium's `windows.onFocusChanged` API documents `WINDOW_ID_NONE` for the absence of a focused Chrome window, but event timing can vary by platform/window manager. On Linux, Chromium also documents special focus-event sequencing around window switches.
+
+For the Stream Inspector's main goal, this is not currently considered a blocking defect because request processing is still filtered by the correct target tab ID, and target reconstruction is immediate once Chromium processes the relevant focus/activation events. The extension does not need to treat 'browser application currently foregrounded' as authoritative media ownership; it needs a stable selected/target tab whose network requests can be associated correctly.
+
+If later product behavior requires a strict UI state that instantly mirrors application focus, this difference can be revisited. It should not block progression into media-candidate detection.
