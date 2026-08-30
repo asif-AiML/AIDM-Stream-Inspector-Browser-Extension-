@@ -1,8 +1,8 @@
 # AIDM Stream Inspector — Session-Reproduction Test Bed
 
-This document records a real-world test case where media discovery succeeds but replaying the captured media URL outside the browser does not. It exists as a development checkpoint for the browser/session-handoff work.
+This document records a real-world test case where media discovery succeeds but replaying the captured media URL outside the browser does not until browser cookies are supplied. It exists as a development checkpoint for the browser/session-handoff work.
 
-Sensitive signed URLs, IP-bound values, tokens, hashes, and cookie values must not be committed here. Examples are structural/redacted only.
+Sensitive signed URLs, IP-bound values, tokens, hashes, cookie values, and local user paths must not be committed here. Examples are structural/redacted only.
 
 ## Test bed — movi.pk playback through an embedded/CDN host
 
@@ -16,7 +16,7 @@ https://<cdn-host>/stream2/<opaque-path>/<signed-or-session-bound-data>:<timesta
 
 The exact captured request contained an IP address and other long opaque/signed values in the URL path. These values must always be preserved exactly by the extension; they must never be cleaned, normalized, reconstructed, or manufactured.
 
-### Raw replay result
+## Raw replay result
 
 The exact candidate URL was handed directly to AiDM without additional browser context.
 
@@ -28,15 +28,15 @@ HTTP Error 404: Not Found
 
 The older Stream Detector extension captured the same underlying HLS candidate in its ordinary mode, and replaying that raw URL failed in the same way.
 
-This is the first strong test-bed example in this project where:
+This establishes that, for this test case:
 
 1. browser playback succeeds;
 2. media discovery succeeds;
 3. the discovered URL by itself is not sufficient for successful external reproduction.
 
-This is materially different from earlier M4 tests such as several soap2day/mirror and Plex candidates, where the captured URL happened to be independently usable during the test.
+This is materially different from earlier M4 tests where some captured URLs happened to be independently usable.
 
-## Old Stream Detector `yt-dlp` mode
+## Old Stream Detector `yt-dlp` mode — corrected reproduction result
 
 The old detector also produced a `yt-dlp` command that added browser/session-oriented context, structurally including:
 
@@ -47,29 +47,68 @@ The old detector also produced a `yt-dlp` command that added browser/session-ori
 <exact HLS URL>
 ```
 
-This is valuable evidence about the kinds of context the old detector considers relevant.
+The first run failed before the media request because the test environment did not use Google Chrome and `yt-dlp` could not find a Chrome cookie database.
 
-However, the resulting test did **not** yet prove that these values are sufficient to reproduce the stream. `yt-dlp` failed before attempting the media request because it tried to locate a Google Chrome cookie database that did not exist on the test machine:
+The command was then repeated with only the browser cookie source changed from:
 
 ```text
-ERROR: could not find chrome cookies database in "/home/<user>/.config/google-chrome"
+--cookies-from-browser chrome
 ```
 
-The active Chromium-derived browser in this environment was Brave, not Google Chrome.
+to:
 
-Therefore the correct conclusion is:
+```text
+--cookies-from-browser brave
+```
 
-> The raw URL is insufficient for this test case, and browser/session context is a strong hypothesis that must now be tested directly. The exact required context has not yet been isolated.
+The same style of command then succeeded. `yt-dlp` reported that it extracted cookies from Brave, successfully downloaded HLS manifest information, identified the fragments, and started downloading the media.
 
-Do **not** record the stronger claim that cookies, Referer, User-Agent, or any one specific header has already been proven necessary until controlled tests demonstrate it.
+This corrects the earlier uncertainty.
 
-## Why browser hardcoding is the wrong architecture
+### What is now proven
 
-The old detector's `--cookies-from-browser chrome` output couples the handoff to a browser name/profile assumption.
+For this reproduced test:
 
-That is unsuitable for AIDM Stream Inspector because users may browse with Firefox, Brave, Chrome, Chromium, or another compatible browser. Hardcoding a browser database path or emitting shell commands also recreates previous AiDM integration problems involving shell quoting, escaping, and browser-specific filesystem paths.
+> Browser cookies were a required missing ingredient in the successful external reproduction path.
 
-The intended architecture remains:
+The raw URL failed, while the otherwise equivalent `yt-dlp` flow succeeded after the browser cookie source was corrected to the browser actually in use.
+
+### What is not yet isolated
+
+The successful command also contained User-Agent and Referer values. Therefore this experiment proves that supplying the correct browser cookies changes the failed reproduction into a successful one, but it does **not** yet prove that cookies alone are always sufficient or that User-Agent/Referer are irrelevant.
+
+The precise statement to preserve is:
+
+> The test establishes cookie dependency for this reproduction path. It does not yet establish the globally minimal set of required request context.
+
+This distinction matters for future implementation: the extension should capture the browser context actually associated with the successful request rather than assume every site requires the same fixed set of values.
+
+## Weakness exposed in the old Stream Detector
+
+The old detector hardcoded a browser choice in its generated shell command:
+
+```text
+--cookies-from-browser chrome
+```
+
+That failed in an environment where Brave was the actual browser.
+
+The detector's media discovery and general idea of adding browser session context were useful, but the handoff was coupled to a browser-name/profile assumption.
+
+This is a concrete weakness for a generic tool because users may browse with Firefox, Brave, Chrome, Chromium, or other compatible browsers.
+
+AIDM Stream Inspector should not hardcode:
+
+- a browser name;
+- a cookie database path;
+- a profile location;
+- shell syntax for invoking another tool.
+
+The extension already runs inside the browser that made the successful request. Its job is to capture browser-observable request/session facts and later hand them to AiDM in a structured form.
+
+## Why structured handoff remains the intended architecture
+
+The desired architecture remains:
 
 ```text
 successful browser request
@@ -83,69 +122,70 @@ AiDM
 reproduce request using downloader tooling
 ```
 
-The extension should hand AiDM structured facts about the request/session rather than a prebuilt Bash command or a guessed browser cookie-database path.
+This avoids the old problems of:
 
-## Important new distinction — discovery vs reproduction
+- `--cookies-from-browser chrome` vs Brave/Firefox mismatch;
+- browser-specific filesystem paths;
+- shell quoting/escaping;
+- Bash syntax being passed through AiDM;
+- coupling the extension to one downloader command format.
 
-This test establishes two separate extension responsibilities:
+## Discovery vs reproduction remains a core distinction
+
+The test confirms two separate extension responsibilities:
 
 ### Discovery
 
 Find the real media request generated by browser playback.
 
-M4 already demonstrated this successfully for the test bed by finding multiple `index.m3u8` candidates.
+M4 already demonstrated this successfully by detecting multiple `index.m3u8` candidates.
 
 ### Reproduction context
 
 Capture enough browser-observable context that AiDM can reproduce the browser's successful request outside the browser when the raw URL alone is insufficient.
 
-A candidate can therefore be correctly detected while still being unusable by AiDM without additional context.
-
-This means:
+Therefore:
 
 > Candidate detected != candidate externally reproducible.
 
-Both properties must eventually be evaluated independently.
+The movi.pk test is currently the strongest regression target for the reproduction-context side of the project because it produces a reproducible contrast between raw-URL failure and cookie-backed success.
 
-## Multiple `index.m3u8` candidates remain unresolved
+## Multiple `index.m3u8` candidates remain a separate problem
 
-The test produced multiple `index.m3u8` candidates and M4 intentionally had no mechanism to determine which one should be chosen.
+The test produced multiple `index.m3u8` candidates and M4 intentionally has no mechanism to determine which one should be chosen.
 
-This ambiguity is not caused by the browser-session problem. It is a separate future candidate-analysis/ranking problem.
+This ambiguity is separate from the session-context problem.
 
-Do not mix these two questions:
+Do not mix:
 
 1. **Which candidate is the most useful/top-level stream?**
 2. **What request/session context is needed to reproduce that candidate?**
 
-A candidate could be correctly ranked but fail externally because context is missing, or it could be externally reproducible but be the wrong quality/rendition/child playlist.
+A candidate could be correctly ranked but fail externally because context is missing, or it could be externally reproducible but still be the wrong quality/rendition/child playlist.
 
 ## M5 priority created by this test
 
-This test changes the immediate development priority.
+M5 should focus on **candidate request-context observation**.
 
-The next milestone should focus on **candidate request-context observation**, not candidate ranking and not full cookie export.
-
-### M5 goal
-
-For requests that M4 already identifies as media candidates, observe and associate the browser-provided request context needed to understand how the browser successfully requested that exact candidate.
+For requests that M4 already identifies as media candidates, M5 should observe and associate the browser-provided context used by the successful request.
 
 M5 should answer:
 
 > What request context did the browser actually send with this detected media candidate?
 
-M5 should begin with browser-observable request metadata such as:
+The initial context of interest includes:
 
 - User-Agent, where exposed;
 - Referer, where exposed;
 - Origin, where exposed;
-- relevant request headers that the extension API exposes;
-- whether cookie/session or authorization material appears to be present/observable, without casually logging sensitive values;
-- existing tab/frame/request association needed to attach the context to the correct candidate.
+- relevant request headers exposed by the browser API;
+- whether cookie/session material is present/observable;
+- authorization-related context where exposed and appropriate;
+- tab/frame/request association needed to attach the context to the correct candidate.
 
-The exact browser API limits must be respected. Captured request context is not the same as direct browser-cookie-database access.
+The browser API limits must be respected. Captured request context is not the same as direct unrestricted access to a browser cookie database.
 
-### M5 is intentionally not yet
+## M5 is intentionally not yet
 
 M5 should **not** yet implement:
 
@@ -156,58 +196,60 @@ M5 should **not** yet implement:
 - shell-command generation;
 - browser-profile/database-path hardcoding;
 - persistent storage of sensitive session data;
-- automatic cookie dumping;
+- automatic dumping of all cookies;
 - subtitle discovery;
 - page-title extraction;
 - final structured handoff schema;
 - bypass logic for server-side restrictions.
 
-The immediate purpose is observation and evidence gathering.
+The immediate purpose is observation and correct association of request context with the exact candidate.
 
 ## Controlled reproduction method for M5+
 
-The movi.pk test bed should be used as a controlled comparison rather than relying on assumptions.
+The movi.pk test bed should continue to be used with fresh media URLs.
 
-For one fresh candidate:
+Current known comparison:
 
-1. confirm playback works in the browser;
-2. capture the exact candidate URL;
-3. verify raw replay outside the browser fails;
-4. inspect the actual browser-observable request context for that same candidate;
-5. reproduce the request outside the browser while adding context incrementally;
-6. record which context changes the result;
-7. repeat with a newly generated/fresh URL if the stream is short-lived.
+```text
+raw candidate URL                            → 404 / failure
+same reproduction flow + correct browser cookies → success
+```
 
-Examples of controlled comparisons may include:
+Future controlled tests should determine the minimal sufficient context by varying one element at a time where practical, for example:
 
-- URL only;
+- URL + cookies;
 - URL + Referer;
 - URL + User-Agent;
 - URL + Origin;
-- URL + the minimal relevant cookie/session context if available and appropriate;
-- combinations only after individual evidence has been recorded.
+- URL + cookies + Referer;
+- URL + cookies + User-Agent;
+- combinations suggested by the actual browser request.
 
-The goal is to identify the **minimum sufficient reproduction context**, not blindly export every browser secret.
+The goal is not to export every browser secret. The goal is to determine and reproduce the minimum context required for a successful request.
 
-## Freshness warning
+## Freshness and IP-bound structure
 
-The observed URL contained timestamp/IP/signature-like data and may be short-lived or otherwise bound to request/session/network state. This structure suggests freshness may matter, but the project must not infer the exact server validation rules solely from the URL shape.
+The observed URL contained timestamp/IP/signature-like data and may be short-lived or bound to request/session/network state.
 
-Future reproduction tests must use fresh URLs and must distinguish:
+This structure must be preserved exactly, but the project must not infer server validation rules solely from URL shape.
 
+Future tests should continue distinguishing:
+
+- cookie dependency;
 - expiration/staleness;
 - IP binding;
-- missing Referer/Origin/User-Agent;
-- missing cookies/session state;
+- Referer/Origin/User-Agent requirements;
 - wrong candidate selection;
 - other server-side validation.
 
-A `404` in this context is not automatically proof of one specific missing header. Some streaming systems deliberately use generic status codes for invalid or expired signed requests.
+For this reproduced case, cookie dependency is now directly supported by the test result; the other dimensions remain separate variables.
 
 ## Long-term checkpoint
 
-The key architectural lesson from this test is:
+The key architectural lesson is now stronger than before:
 
-> Discovery and reproduction are separate problems. M4 proves that the extension can find a media candidate; M5 begins proving what browser request context is necessary to make that candidate reproducible outside the browser.
+> Discovery and reproduction are separate problems, and at least one real regression target has demonstrated that browser cookies can be necessary for successful external reproduction of a correctly detected HLS candidate.
 
-This test bed should remain part of regression testing as long as it remains available and behaves reproducibly, because it exercises a problem that the easier M4 targets did not expose.
+AIDM Stream Inspector should solve this generically by capturing browser-observable context from the browser actually making the request, not by hardcoding Chrome, Brave, Firefox, or any browser-specific cookie path.
+
+This test bed should remain part of regression testing as long as it remains available and reproducible.
