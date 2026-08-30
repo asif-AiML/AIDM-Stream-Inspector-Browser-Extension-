@@ -131,3 +131,80 @@ Chromium's `windows.onFocusChanged` API documents `WINDOW_ID_NONE` for the absen
 For the Stream Inspector's main goal, this is not currently considered a blocking defect because request processing is still filtered by the correct target tab ID, and target reconstruction is immediate once Chromium processes the relevant focus/activation events. The extension does not need to treat 'browser application currently foregrounded' as authoritative media ownership; it needs a stable selected/target tab whose network requests can be associated correctly.
 
 If later product behavior requires a strict UI state that instantly mirrors application focus, this difference can be revisited. It should not block progression into media-candidate detection.
+
+## AD-011 — Media detection must be layered; URL extensions are only the first evidence source
+
+The final Stream Inspector must not assume that useful media requests always expose recognizable media extensions such as `.m3u8`, `.mpd`, `.mp4`, or `.webm` in the request URL.
+
+Previous testing with third-party stream-detector extensions already showed why extension-only matching is insufficient: media playback could succeed while the detector showed no useful stream, or only unrelated resources such as PNG/TXT requests. Real streaming systems may use opaque CDN paths, API-style endpoints, signed routes, segmented-media URLs, byte-range requests, or other request patterns whose URLs do not visibly identify the media format.
+
+Examples of valid media traffic that may not contain an obvious filename extension include:
+
+- opaque CDN URLs such as `/v1/abc123xyz?...`;
+- API-style endpoints such as `/stream?id=12345`;
+- segment paths such as `/chunk/000123`;
+- signed/tokenized routes where the useful evidence is in response metadata rather than the path;
+- manifests or media delivered through routes whose visible URL does not end in `.m3u8`, `.mpd`, `.mp4`, or another recognizable suffix;
+- media identified primarily by MIME/content type, byte-range behavior, repeated segment traffic, manifest/segment relationships, or frame/initiator context.
+
+Therefore candidate detection is intentionally designed as a layered evidence pipeline rather than one hardcoded extension list.
+
+### Detection layer 1 — obvious URL evidence
+
+The first detection layer, beginning with M4, uses conservative URL/path evidence for clearly recognizable media requests, including HLS manifests, DASH manifests, direct video files, and common audio files.
+
+This layer is intentionally simple and deterministic. Its purpose is to establish a reliable baseline, not to solve all real-world stream detection.
+
+A request that does not match one of these obvious patterns must be treated as `not an obvious candidate yet`, not as permanently non-media.
+
+### Detection layer 2 — response/MIME evidence
+
+A later milestone should inspect browser-observable response metadata where available. MIME/content type can identify media even when the URL is opaque.
+
+Relevant examples include HLS/DASH manifest MIME types, `video/*`, `audio/*`, and other response metadata that materially increases confidence that a request is media-related.
+
+This layer should complement URL evidence rather than replace it.
+
+### Detection layer 3 — behavioral and structural evidence
+
+Some streaming traffic may still be ambiguous even after URL and MIME inspection. Later detection should consider relationships and request behavior, such as:
+
+- repeated segmented-media requests;
+- byte-range media traffic;
+- manifest-to-segment relationships;
+- related CDN request patterns;
+- frame/iframe or initiator context;
+- useful response metadata;
+- grouping requests that appear to belong to the same playback session.
+
+The objective is not to guess aggressively from any single weak clue. Multiple weak signals can eventually be combined into stronger evidence.
+
+### Detection layer 4 — candidate ranking
+
+Candidate detection and candidate ranking are separate responsibilities.
+
+Detection answers:
+
+> Is this request plausibly media-related?
+
+Ranking answers:
+
+> Among the candidates observed for this playback session, which ones are most likely to be useful to the user/AiDM?
+
+Ranking may later consider factors such as manifest type, master-vs-media playlist role, direct-file characteristics, resolution/bitrate metadata, duplication, request relationships, freshness, and other evidence gathered by previous layers.
+
+M4 must not perform ranking or claim that an obvious candidate is the final/best stream.
+
+### Signed and tokenized URL rule
+
+Detection logic may inspect URL components for classification, but the original captured media URL must always be preserved exactly for later handoff.
+
+The extension must never strip, clean, normalize away, or rewrite signed query parameters such as `token`, `expires`, `signature`, `policy`, or `auth` merely to make classification easier. A signed media URL may stop working if even seemingly unimportant components are altered.
+
+### Long-term checkpoint
+
+The architectural checkpoint is:
+
+> URL-extension matching is a useful first detector, not the definition of media.
+
+If future development begins treating the M4 extension list as the complete detection model, this decision should be revisited before adding more hardcoded filename rules. The intended direction is layered evidence: obvious URL clues first, then MIME/response evidence, then behavioral/structural relationships, followed by candidate ranking.
