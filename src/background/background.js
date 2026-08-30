@@ -102,7 +102,24 @@ initializeTargetTab();
 
 // Chromium loads only this service worker; Firefox loads both manifest scripts.
 if (typeof importScripts === "function") {
-  importScripts("network-observer.js");
+  importScripts("../core/stream-types.js", "candidate-detector.js", "network-observer.js");
+  globalThis.startNetworkObserver();
+} else {
+  loadBackgroundPageScript("src/core/stream-types.js", () => {
+    loadBackgroundPageScript("src/background/candidate-detector.js", () => {
+      globalThis.startNetworkObserver();
+    });
+  });
 }
 
 console.log("AIDM Stream Inspector background context started.");
+
+function loadBackgroundPageScript(extensionPath, handleLoad) {
+  const script = document.createElement("script");
+  script.src = chrome.runtime.getURL(extensionPath);
+  script.addEventListener("load", handleLoad, { once: true });
+  script.addEventListener("error", () => {
+    console.error(`[AIDM] Could not load background module: ${extensionPath}`);
+  }, { once: true });
+  document.head.appendChild(script);
+}

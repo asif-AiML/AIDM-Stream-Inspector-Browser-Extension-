@@ -1,13 +1,23 @@
-function logObservedRequest(details) {
+function detectTargetTabCandidate(details) {
   const targetTabId = globalThis.getCurrentTargetTabId();
 
   if (details.tabId !== targetTabId) {
     return;
   }
 
-  console.log(`[AIDM Target][tab ${details.tabId}] ${details.method} ${details.url}`);
+  const candidateType = globalThis.detectObviousMediaCandidate(details.url);
+
+  if (candidateType === null) {
+    return;
+  }
+
+  console.log(`[AIDM Candidate][${candidateType}] ${details.url}`);
 }
 
-chrome.webRequest.onBeforeRequest.addListener(logObservedRequest, {
-  urls: ["http://*/*", "https://*/*"]
-});
+function startNetworkObserver() {
+  chrome.webRequest.onBeforeRequest.addListener(detectTargetTabCandidate, {
+    urls: ["http://*/*", "https://*/*"]
+  });
+}
+
+globalThis.startNetworkObserver = startNetworkObserver;
