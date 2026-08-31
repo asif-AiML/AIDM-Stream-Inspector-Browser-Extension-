@@ -238,6 +238,102 @@ M4 also exposed important limitations that are intentionally outside its scope:
 
 ---
 
+## M5 — Candidate request-context observation
+
+### Milestone verdict — PASS
+
+M5 successfully associated browser-observed request context with M4 HLS candidates on the movi.pk regression target in both Firefox and Brave/Chromium.
+
+For the same class of detected HLS request, the extension reported:
+
+- exact candidate URL;
+- browser User-Agent;
+- Referer;
+- Origin when exposed;
+- Cookie presence state;
+- Authorization presence state;
+- Range presence state.
+
+The most important validation was that the extension-observed Referer matched the Referer previously exposed by the older Stream Detector and independently proven sufficient in the movi.pk ablation study.
+
+No site-specific hostname logic was required.
+
+### Cross-browser observation
+
+Firefox and Brave both exposed the same useful Referer for the tested candidate, but Origin differed:
+
+- Firefox reported Origin as `null`/not present for the tested request;
+- Brave/Chromium reported the embedded-player origin.
+
+Cookies, Authorization, and Range were not observed on the tested request in either browser.
+
+This is useful evidence that request-context fields are not guaranteed to appear identically across browser engines or request paths. The extension must continue to report what the browser actually exposes rather than fabricate missing values or assume one browser's header set is universal.
+
+The absence of Cookie on this request is also consistent with the movi.pk ablation result: the tested reproduction did not require cookies once the correct Referer was supplied. This does **not** imply cookies are globally unnecessary for other sites.
+
+### M5 checkpoint
+
+The project has now demonstrated a generic capability:
+
+> AIDM Stream Inspector can detect a media candidate and recover reproduction-relevant request context, including the Referer that made an otherwise failing movi.pk HLS request externally reproducible.
+
+This is broader than a movi.pk-specific fix and validates the candidate-context layer of the architecture.
+
+---
+
+## New detection gap — averotv.top / query-embedded HLS
+
+A new real-world test target exposed a different problem: **candidate detection failure, not browser-session reproduction failure**.
+
+During playback on `https://averotv.top`, AIDM Stream Inspector produced no media candidate at all, while the older Stream Detector exposed a useful HLS request.
+
+Structurally, the request looked like:
+
+```text
+https://<worker-host>/hls?url=https%3A%2F%2F<upstream-host>%2F<opaque-path>%2Findex.m3u8&provider=<value>
+```
+
+The important detail is that the **outer request pathname is only `/hls`**. The actual `.m3u8` manifest URL is URL-encoded inside a query-parameter value.
+
+Therefore M4's conservative pathname-extension detector has no obvious `.m3u8` suffix to match and correctly misses the request under its current rules.
+
+This is not evidence that network observation failed. It is evidence that the current classifier looks only at the outer URL/path shape and does not yet recognize media URLs embedded inside query parameters.
+
+### External reproduction result
+
+The regular captured outer URL was handed to AiDM and AiDM began downloading it without browser-session context.
+
+This establishes that the missed request was practically useful and that the immediate defect is discovery/classification, not session handoff.
+
+The older detector's generated yt-dlp command also reached HLS processing and enumerated fragments. Its eventual failure was:
+
+```text
+[Errno 36] File name too long
+```
+
+This error was caused by yt-dlp deriving an excessively long output filename from the long query-embedded URL. It is **not** evidence of authentication/session rejection.
+
+The live-HLS warning shown before that error is a separate downloader-behavior concern and does not explain why AIDM Stream Inspector missed the request.
+
+### Architectural lesson
+
+This test adds a concrete detection class beyond simple pathname extensions:
+
+> A request can itself be a useful HLS endpoint even when `.m3u8` appears only inside an encoded query-parameter value rather than in the outer request pathname.
+
+Future detection should therefore consider **query-embedded media evidence** without hardcoding `averotv.top`, `provider=vaplayer`, `/hls`, or a particular parameter name such as `url=`.
+
+Any such classifier must preserve the exact original outer request URL for later handoff. It may decode query-parameter values for evidence/classification, but must not replace the captured request with the inner decoded URL unless a later, explicitly designed milestone proves that is the correct handoff behavior.
+
+This test should remain a regression target because it cleanly distinguishes:
+
+- network observation works;
+- raw outer request is useful/downloadable;
+- M4 pathname-extension classification misses it;
+- session context is not the immediate issue.
+
+---
+
 ## Browser-session requirement — revised testing rule
 
 The M4 tests showed that several captured URLs from the current test bed were usable directly in VLC/AiDM without manually supplying cookies, Referer, User-Agent, or other browser-session data.
@@ -257,8 +353,6 @@ A proper future browser-session test should use a controlled comparison where:
 
 Only such a paired test can demonstrate that a particular server actually depends on browser/session state.
 
-Until that evidence is reproduced, browser-session handoff remains an architectural goal motivated by known classes of protected streaming systems and YouTube/session problems, but **Plex should no longer be cited as the validating example**.
-
 ---
 
 ## Regression-test-bed lessons
@@ -268,18 +362,17 @@ The current tests suggest maintaining different classes of targets rather than r
 - **controlled standards/demo target:** Shaka Player, useful for deterministic HLS/DASH and segment behavior;
 - **real-world multi-mirror targets:** useful for varying CDN/player behavior and messy candidate sets;
 - **Plex/public mature platform:** useful for multiple manifest variants and reproducibility checks;
-- **future session-enforced target:** specifically needed to prove header/cookie/session handoff rather than assuming it.
+- **movi.pk regression target:** useful for request-context observation and Referer-dependent external reproduction;
+- **averotv.top regression target:** useful for query-embedded HLS detection where the outer path does not expose `.m3u8`.
 
 Shaka should remain particularly important because it exposed a weakness that simple success-only tests would have missed: an extension can "detect lots of media" while producing a worse user-facing candidate set than a detector that understands manifests and segment relationships.
 
 ---
 
-## Long-term checkpoint from M4 testing
+## Long-term checkpoint
 
-The strongest lesson is:
+The combined lessons are now:
 
-> Detection quantity is not detection quality.
+> Detection quantity is not detection quality, and media evidence may exist outside the outer URL pathname.
 
-A future Stream Inspector should prefer a small number of meaningful, explainable stream candidates over hundreds of technically correct media-segment matches.
-
-M4 establishes the baseline detector. Later milestones should add evidence and relationships without destroying this simple deterministic layer.
+M4 establishes the deterministic baseline. M5 proves request-context association. Future detection layers should add query-embedded, MIME/response, and behavioral evidence without destroying the simple baseline or hardcoding individual websites.
