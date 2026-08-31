@@ -12,21 +12,83 @@ const obviousMediaExtensions = [
 ];
 
 function detectObviousMediaCandidate(requestUrl) {
-  let pathname;
+  let parsedRequestUrl;
 
   try {
-    pathname = new URL(requestUrl).pathname.toLowerCase();
+    parsedRequestUrl = new URL(requestUrl);
   } catch (error) {
     return null;
   }
 
+  const pathnameType = classifyObviousMediaPath(parsedRequestUrl.pathname);
+
+  if (pathnameType !== null) {
+    return pathnameType;
+  }
+
+  const rawQuery = parsedRequestUrl.search.slice(1);
+
+  for (const queryPart of rawQuery.split("&")) {
+    const separatorIndex = queryPart.indexOf("=");
+
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const rawValue = queryPart.slice(separatorIndex + 1);
+    const rawValueType = classifyObviousMediaEvidence(rawValue, parsedRequestUrl);
+
+    if (rawValueType !== null) {
+      return rawValueType;
+    }
+
+    const decodedValue = safelyDecodeQueryValue(rawValue);
+
+    if (decodedValue === null) {
+      continue;
+    }
+
+    const decodedValueType = classifyObviousMediaEvidence(
+      decodedValue,
+      parsedRequestUrl
+    );
+
+    if (decodedValueType !== null) {
+      return decodedValueType;
+    }
+  }
+
+  return null;
+}
+
+function classifyObviousMediaEvidence(value, baseUrl) {
+  try {
+    return classifyObviousMediaPath(new URL(value, baseUrl).pathname);
+  } catch (error) {
+    return null;
+  }
+}
+
+function classifyObviousMediaPath(pathname) {
+  const lowercasePathname = pathname.toLowerCase();
+
   for (const mediaType of obviousMediaExtensions) {
-    if (mediaType.extensions.some((extension) => pathname.endsWith(extension))) {
+    if (mediaType.extensions.some(
+      (extension) => lowercasePathname.endsWith(extension)
+    )) {
       return mediaType.type;
     }
   }
 
   return null;
+}
+
+function safelyDecodeQueryValue(rawValue) {
+  try {
+    return decodeURIComponent(rawValue.replace(/\+/g, " "));
+  } catch (error) {
+    return null;
+  }
 }
 
 globalThis.detectObviousMediaCandidate = detectObviousMediaCandidate;
