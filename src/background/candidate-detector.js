@@ -11,12 +11,38 @@ const obviousMediaExtensions = [
   }
 ];
 
+const obviousSubtitleExtensions = [
+  { type: globalThis.AIDM_SUBTITLE_FORMATS.SRT, extensions: [".srt"] },
+  { type: globalThis.AIDM_SUBTITLE_FORMATS.VTT, extensions: [".vtt"] },
+  { type: globalThis.AIDM_SUBTITLE_FORMATS.ASS, extensions: [".ass"] },
+  { type: globalThis.AIDM_SUBTITLE_FORMATS.SSA, extensions: [".ssa"] }
+];
+
 function detectObviousMediaCandidate(requestUrl) {
   const evidence = detectObviousMediaCandidateEvidence(requestUrl);
   return evidence === null ? null : evidence.type;
 }
 
 function detectObviousMediaCandidateEvidence(requestUrl) {
+  return detectObviousCandidateEvidence(requestUrl, obviousMediaExtensions);
+}
+
+function detectObviousSubtitleCandidateEvidence(requestUrl) {
+  const evidence = detectObviousCandidateEvidence(requestUrl, obviousSubtitleExtensions);
+
+  if (evidence === null) {
+    return null;
+  }
+
+  return {
+    type: globalThis.AIDM_STREAM_TYPES.SUBTITLE,
+    format: evidence.type,
+    pathname: evidence.pathname,
+    source: evidence.source
+  };
+}
+
+function detectObviousCandidateEvidence(requestUrl, extensionGroups) {
   let parsedRequestUrl;
 
   try {
@@ -25,7 +51,7 @@ function detectObviousMediaCandidateEvidence(requestUrl) {
     return null;
   }
 
-  const pathnameType = classifyObviousMediaPath(parsedRequestUrl.pathname);
+  const pathnameType = classifyObviousCandidatePath(parsedRequestUrl.pathname, extensionGroups);
 
   if (pathnameType !== null) {
     return {
@@ -45,12 +71,14 @@ function detectObviousMediaCandidateEvidence(requestUrl) {
     }
 
     const rawValue = queryPart.slice(separatorIndex + 1);
-    const rawValueEvidence = classifyObviousMediaEvidence(rawValue, parsedRequestUrl);
+    const rawValueEvidence = classifyObviousCandidateEvidence(
+      rawValue, parsedRequestUrl, extensionGroups
+    );
 
     const decodedValue = safelyDecodeQueryValue(rawValue);
     const decodedValueEvidence = decodedValue === null
       ? null
-      : classifyObviousMediaEvidence(decodedValue, parsedRequestUrl);
+      : classifyObviousCandidateEvidence(decodedValue, parsedRequestUrl, extensionGroups);
 
     if (rawValueEvidence !== null) {
       // Encoded separators can leave a raw value ending in .m3u8. Expose the
@@ -69,24 +97,24 @@ function detectObviousMediaCandidateEvidence(requestUrl) {
   return null;
 }
 
-function classifyObviousMediaEvidence(value, baseUrl) {
+function classifyObviousCandidateEvidence(value, baseUrl, extensionGroups) {
   try {
     const pathname = new URL(value, baseUrl).pathname;
-    const type = classifyObviousMediaPath(pathname);
+    const type = classifyObviousCandidatePath(pathname, extensionGroups);
     return type === null ? null : { type, pathname, source: "query-embedded pathname" };
   } catch (error) {
     return null;
   }
 }
 
-function classifyObviousMediaPath(pathname) {
+function classifyObviousCandidatePath(pathname, extensionGroups) {
   const lowercasePathname = pathname.toLowerCase();
 
-  for (const mediaType of obviousMediaExtensions) {
-    if (mediaType.extensions.some(
+  for (const candidateType of extensionGroups) {
+    if (candidateType.extensions.some(
       (extension) => lowercasePathname.endsWith(extension)
     )) {
-      return mediaType.type;
+      return candidateType.type;
     }
   }
 
@@ -103,3 +131,4 @@ function safelyDecodeQueryValue(rawValue) {
 
 globalThis.detectObviousMediaCandidate = detectObviousMediaCandidate;
 globalThis.detectObviousMediaCandidateEvidence = detectObviousMediaCandidateEvidence;
+globalThis.detectObviousSubtitleCandidateEvidence = detectObviousSubtitleCandidateEvidence;

@@ -5,25 +5,38 @@ function detectTargetTabCandidate(details) {
     return;
   }
 
-  const candidateEvidence = globalThis.detectObviousMediaCandidateEvidence(details.url);
+  // Preserve existing media precedence when a request contains mixed URL clues.
+  const candidateEvidence = globalThis.detectObviousMediaCandidateEvidence(details.url)
+    || globalThis.detectObviousSubtitleCandidateEvidence(details.url);
 
   if (candidateEvidence === null) {
     return;
   }
 
-  const ranking = globalThis.rankMediaCandidate(candidateEvidence);
+  const isSubtitle = candidateEvidence.type === globalThis.AIDM_STREAM_TYPES.SUBTITLE;
+  let candidateHeading;
+  let rankingOutput = "";
+
+  if (isSubtitle) {
+    candidateHeading = `[AIDM Subtitle][${candidateEvidence.format}]`;
+  } else {
+    const ranking = globalThis.rankMediaCandidate(candidateEvidence);
+    candidateHeading = `[AIDM Candidate][${candidateEvidence.type}]`;
+    rankingOutput = `Priority: ${getPriorityLabel(ranking.score)} (${ranking.score})\n`
+      + `Ranking path source: ${candidateEvidence.source}\n`
+      + `Ranking evidence:\n${ranking.evidence.map((item) =>
+        `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
+      ).join("\n")}\n`;
+  }
+
   const requestHeaders = Array.isArray(details.requestHeaders)
     ? details.requestHeaders
     : [];
 
   console.log(
-    `[AIDM Candidate][${candidateEvidence.type}]\n`
+    `${candidateHeading}\n`
     + `URL: ${details.url}\n`
-    + `Priority: ${getPriorityLabel(ranking.score)} (${ranking.score})\n`
-    + `Ranking path source: ${candidateEvidence.source}\n`
-    + `Ranking evidence:\n${ranking.evidence.map((item) =>
-      `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
-    ).join("\n")}\n`
+    + rankingOutput
     + `User-Agent: ${getHeaderValue(requestHeaders, "user-agent")}\n`
     + `Referer: ${getHeaderValue(requestHeaders, "referer")}\n`
     + `Origin: ${getHeaderValue(requestHeaders, "origin")}\n`

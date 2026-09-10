@@ -413,3 +413,81 @@ Where the stream is authored accordingly, such a parent manifest may describe:
 - subtitle renditions.
 
 This makes master/parent manifests strategically important for later media metadata, multi-audio, subtitle association, and structured handoff.
+
+---
+
+## M7 — Obvious subtitle detection implemented; browser validation pending
+
+Supported suffixes are `.srt`, `.vtt`, `.ass`, and `.ssa`, matched without case
+sensitivity. `.txt`, suffixes such as `.srt.txt`, and extensionless paths do not
+qualify by themselves. These are URL-based candidates; bodies are not inspected.
+
+`stream-types.js` defines `SUBTITLE` separately from HLS/DASH/VIDEO/AUDIO, with
+SRT/VTT/ASS/SSA in `AIDM_SUBTITLE_FORMATS`. Subtitle evidence contains
+`type: SUBTITLE`, a separate `format`, `pathname`, and `source`. No downstream
+code needs to parse a display string to distinguish subtitles from media.
+
+The existing detector now shares its pathname/query traversal between separate
+media and subtitle extension lists. Both use outer pathname evidence first,
+then each query value raw and after one guarded decode. The observer tries the
+existing media detector first; subtitle detection is a fallback. Thus mixed
+media/subtitle URL clues retain the pre-M7 media classification, even when the
+subtitle clue appears earlier. M7 does not infer multiple assets from one request.
+
+Subtitle output starts with `[AIDM Subtitle][SRT]` (or VTT/ASS/SSA). It uses the
+same M5 header helpers and log block for the exact outer request URL, User-Agent,
+Referer, Origin, Cookie presence, Authorization presence, and Range. Embedded
+paths are evidence only and never replace the captured URL. Missing headers
+remain `not observed`; Cookie and Authorization values are not printed.
+
+The observer bypasses the media ranker for subtitles, so subtitle logs have no
+media score, priority label, or ranking evidence. Existing media scores, reasons,
+HIGH/MEDIUM/LOW labels, low-ranked candidates, and repeated range logs are unchanged.
+No permissions, loading changes, active requests, dependencies, or storage were added.
+
+### Manual Firefox validation
+
+1. Reload the temporary extension in `about:debugging#/runtime/this-firefox`,
+   then open its background console with **Inspect**.
+2. Focus the intended playback tab on the existing subtitle regression target
+   or another player known to expose subtitle requests. Reload playback and
+   enable/select subtitles so the browser issues fresh requests.
+3. Compare the page Network panel or old Stream Detector with the extension
+   console. Each observed target-tab `.srt`/`.vtt`/`.ass`/`.ssa` resource should
+   produce the corresponding `[AIDM Subtitle][FORMAT]` entry without a priority.
+   A site may expose only some formats; use another known resource for the rest.
+4. Compare the exact request URL, including signed queries, with the logged URL.
+   For a wrapped request, expect the original outer URL, not its decoded subtitle
+   path. Confirm User-Agent/Referer/Origin/Range where observed and presence-only
+   Cookie/Authorization handling. Do not save live credentials in project files.
+5. Confirm HLS/DASH/video/audio candidates still show their existing ranking
+   evidence and priority labels. Switch tabs while the previous tab generates
+   traffic; only the current target should produce candidate logs.
+
+### Brave/Chromium sanity validation
+
+1. Reload the unpacked extension in `brave://extensions` (or
+   `chrome://extensions`) and inspect its background service worker.
+2. Focus the playback tab, reload playback, enable subtitles, and repeat the
+   subtitle URL/context and media-ranking comparisons above.
+3. Close worker DevTools, allow the worker to idle, then switch tabs and resume
+   playback. Reopen inspection and verify subtitle/media logging resumes for the
+   current target. Existing documented MV3 warnings and header-exposure differences
+   still apply; M7 adds no browser-specific behavior.
+
+### Local checks and limits
+
+Syntax checks passed. In-memory checks covered 32 direct/embedded subtitle
+positives, false-positive exclusions, 260 unchanged media evidence/ranking cases,
+520 exact pre/post media-log comparisons, subtitle exclusion from the ranker,
+exact URL/context/redaction behavior, target isolation, both mocked background
+loading paths, and both header-registration paths. The ranker, manifest, and
+background loader were verified unchanged. No test framework was added.
+Actual Firefox/Brave or website playback tests were not performed for M7.
+
+M7 observes only requests the browser makes and exposes. Selecting a subtitle
+may be necessary to trigger a request. Language/label/default/forced metadata
+and subtitle-to-media association remain deferred to M7.1. Manifest/MIME,
+extensionless, DOM/player, and API/JSON discovery remain deferred to M7.2.
+Subtitle ranking, downloads, muxing, deduplication, UI, and AiDM integration
+remain outside this implementation.
