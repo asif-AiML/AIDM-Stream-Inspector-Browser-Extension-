@@ -1,12 +1,61 @@
 # AIDM Stream Inspector — Development Roadmap After Foundation
 
-This document records the development direction after the foundation phase. It exists to prevent future work from losing the architectural separation already established through M0–M5 and M4.1 testing.
+This document records the development direction after the foundation phase and the current evidence that should guide future work. It exists to prevent development from drifting away from what has actually been proven through testing.
 
-The foundation phase has proven that the extension can observe browser traffic, associate requests with the correct target tab, detect obvious media candidates, detect media URLs embedded inside query parameters, and associate basic request context with detected candidates.
+## Current project state — 2026-09-10
 
-The next phase is no longer primarily about finding obvious URLs. It is about understanding the browser request lifecycle deeply enough to explain why browser playback succeeds when an external downloader cannot reproduce the same media request.
+The project is currently at a deliberate reflection/testing checkpoint.
 
-## Foundation checkpoint
+The known-good implementation has reached:
+
+- M0 — extension foundation and cross-browser startup;
+- M1 — raw passive network observation;
+- M2 — request-to-tab association;
+- M3 — target-tab filtering;
+- M3.1 — Chromium service-worker lifecycle/state reconstruction fix;
+- M4 — obvious media-candidate detection from URL pathname;
+- M4.1 — media evidence embedded inside query-parameter values while preserving the original outer request URL;
+- M5 — basic candidate request-context observation, including User-Agent, Referer, Origin, and safe presence/absence handling for Cookie, Authorization, and Range where observable.
+
+All of the above form the tested foundation.
+
+`dev/01-foundation` should remain the known-good foundation snapshot. Deeper experimental work belongs on `dev/02-traffic-intelligence`.
+
+However, no M5.1 implementation should begin merely because a single stream attempt fails. The project is currently prioritizing stronger regression testing of the existing foundation before adding deeper traffic-intelligence code.
+
+### Important evidence correction: fboxtv
+
+An earlier fboxtv test produced HTTP 403 failures even when yt-dlp was supplied with combinations of Referer, User-Agent, Origin, browser-cookie loading, and browser impersonation. At that time, this looked like evidence of a deeper browser-only reproduction requirement.
+
+A later test, several days afterward, changed that conclusion. A structurally similar fboxtv stream began downloading successfully with a conventional yt-dlp command using browser-derived context such as User-Agent, Referer, and browser cookies.
+
+The remaining errors were fragment read timeouts and retries, not manifest authorization failures. The download continued.
+
+Therefore the earlier fboxtv result must **not** be treated as proof that M5 is missing a mysterious request-context field or that request-chain analysis is already required for that platform.
+
+The safer classification is now:
+
+> fboxtv is a volatile real-world regression target whose provider, player host, CDN host, media host, token behavior, or server policy may change over time.
+
+This also reinforces an earlier lesson from Plex testing: one failed reproduction attempt is evidence for investigation, not evidence for architecture.
+
+### New implementation rule
+
+Before a real-world website is allowed to justify a new architectural milestone, the relevant failure should be reproducible across fresh captures and controlled retries.
+
+Prefer evidence such as:
+
+- repeated failure with fresh tokens/URLs;
+- the same failure across multiple sessions or times;
+- one-variable-at-a-time ablation;
+- a clear difference between the browser's successful request and the external reproduction attempt;
+- confirmation that the failure is not merely token expiry, provider rotation, CDN instability, or transient network behavior.
+
+A site-specific observation should become a generic feature requirement only after the underlying pattern is demonstrated.
+
+---
+
+# Foundation checkpoint
 
 The following capabilities form the known-good foundation:
 
@@ -19,43 +68,93 @@ The following capabilities form the known-good foundation:
 - detection of obvious media evidence embedded inside query-parameter values while preserving the original outer request;
 - request-context observation for detected candidates, including User-Agent, Referer, Origin, and safe presence/absence reporting for sensitive fields where observable.
 
-This foundation should remain stable while deeper traffic-intelligence work proceeds on a new development branch.
-
-## Why the next phase exists
-
-Real-world regression testing produced several distinct failure classes:
-
-### Shaka Player
-
-Detection succeeds but produces too many low-level media-segment candidates. This proves that detection quantity is not detection quality and that later manifest/segment relationship analysis and ranking are required.
-
-### averotv-style wrapped HLS request
-
-The useful media request was hidden behind an outer worker/proxy URL whose query parameter contained an encoded `.m3u8` URL. Pathname-only detection missed it. M4.1 solved this pattern generically by treating embedded query values as detection evidence while preserving the exact outer request as the candidate.
-
-### movi.pk-style reproduction requirement
-
-Media detection succeeded, but replaying the raw URL externally failed. Controlled ablation showed that adding the actual browser Referer was sufficient for that specific test bed. This proved that detection and external reproduction are separate problems and that request-context capture is necessary.
-
-### fboxtv-style deeper reproduction wall
-
-Media detection succeeds and M5 exposes the obvious request context, but external replay still fails with HTTP 403 even after testing combinations including Referer, User-Agent, Origin, browser-cookie loading, and yt-dlp browser impersonation.
-
-This establishes a new boundary:
-
-> Basic candidate context is not always enough. Some protected playback flows require understanding more of the browser request lifecycle, response behavior, or request chain.
-
-The project should therefore stop guessing individual headers and begin observing the browser transaction more completely.
+This foundation should remain stable while future traffic-intelligence work is developed separately.
 
 ---
 
-# Phase 2 — Deep Traffic Intelligence
+# What current regression testing has proven
+
+## Shaka Player
+
+Detection succeeds but may produce many low-level `.mp4` segment candidates. This proves that detection quantity is not detection quality and that later manifest/segment relationship analysis and ranking will be useful.
+
+This is a reproducible usefulness/ranking problem, not a failure to observe media traffic.
+
+## averotv-style wrapped HLS request
+
+The useful media request was hidden behind an outer worker/proxy URL whose query parameter contained an encoded `.m3u8` URL. Pathname-only detection missed it.
+
+M4.1 solved this pattern generically by treating embedded query values as detection evidence while preserving the exact original outer browser request as the candidate.
+
+## movi.pk-style reproduction requirement
+
+Media detection succeeded, but replaying the raw URL externally failed. Controlled ablation showed that adding the actual browser Referer was sufficient for that specific test bed.
+
+This proved that detection and external reproduction are separate problems and that request-context capture is necessary.
+
+It did **not** prove that Referer is universally sufficient.
+
+## fboxtv-style volatile provider behavior
+
+The extension successfully detects HLS candidates and observes the obvious browser request context.
+
+One testing period produced persistent HTTP 403 failures in external replay despite multiple added context variables. A later testing period produced successful downloading using an ordinary yt-dlp browser-context command.
+
+The player/media infrastructure also changed between tests, including different Referer/player domains and different media/CDN hosts.
+
+Therefore fboxtv currently demonstrates **environment/provider volatility**, not a proven extension capability gap.
+
+Fragment read timeouts observed during a successful later download should be treated as delivery/network reliability symptoms rather than authentication failure while the downloader continues retrying and making progress.
+
+---
+
+# Current development decision
+
+The project should **not rush into M5.1** based on the earlier fboxtv result.
+
+The immediate phase is stress-testing the existing M4/M4.1/M5 foundation against increasingly difficult streams and classifying failures correctly.
+
+The next implementation milestone should be selected by reproducible evidence.
+
+Useful failure classes include:
+
+### A — Detection gap
+
+The media plays in the browser, but the extension detects no useful candidate.
+
+This should drive another detection-layer improvement such as response/MIME-based or behavioral/opaque media detection.
+
+### B — Request-context gap
+
+The extension detects the candidate, but controlled reproduction repeatedly proves that an additional browser-observable field is required and M5 does not capture it.
+
+This should drive deeper candidate request observation.
+
+### C — Candidate usefulness/ranking gap
+
+The extension detects technically valid media traffic, but floods the candidate set with segments or exposes multiple ambiguous candidates while a higher-level useful manifest exists.
+
+This should drive relationship analysis, ranking, and deduplication.
+
+### D — Subtitle discovery gap
+
+Video playback/detection works, but browser-visible subtitles are not discovered or associated with the correct stream.
+
+This should drive the subtitle-discovery layer.
+
+Whichever reproducible class becomes the strongest concrete limitation should determine the next implementation work.
+
+---
+
+# Phase 2 — Deep Traffic Intelligence (planned, not yet activated)
+
+The following milestones remain architecturally useful. They are preserved as the intended direction if testing proves that deeper transaction understanding is required.
 
 ## M5.1 — Deep candidate request metadata
 
 ### Goal
 
-For each already-detected media candidate, capture a much fuller browser-observable request picture without yet attempting to reproduce or modify the request.
+For each already-detected media candidate, capture a fuller browser-observable request picture without replaying or modifying the request.
 
 M5.1 should answer:
 
@@ -63,13 +162,13 @@ M5.1 should answer:
 
 ### Intended evidence
 
-Where the browser APIs expose it, associate the candidate with information such as:
+Where browser APIs expose it, associate candidates with information such as:
 
 - request ID;
 - HTTP method;
 - browser request/resource type;
 - tab ID;
-- frame ID / parent frame context;
+- frame ID / parent-frame context;
 - initiator, origin URL, or document URL where available;
 - all observable request-header names;
 - safe values for non-sensitive request headers;
@@ -91,22 +190,13 @@ Potentially useful headers may include, where actually exposed:
 - User-Agent;
 - other browser-observable fields discovered from real tests.
 
-The implementation must not hardcode fboxtv, any site hostname, player provider, or one known header combination.
+The implementation must remain generic and must not hardcode a specific website, provider, hostname, or header combination.
 
-### Non-goals
+### Activation condition
 
-M5.1 is not:
+M5.1 should begin when testing produces a reproducible request-context gap, or when a broader evidence model is needed for another clearly demonstrated feature.
 
-- request replay;
-- downloader integration;
-- candidate ranking;
-- response analysis;
-- redirect reconstruction;
-- cookie-database access;
-- automatic secret export;
-- site-specific bypass logic.
-
-The purpose is deeper observation and accurate association with the exact candidate request.
+It should not begin merely because one volatile website temporarily returns 403.
 
 ---
 
@@ -137,11 +227,9 @@ Where browser APIs expose it, correlate by request ID and record:
 
 Sensitive response values must remain protected and must not be casually logged or persisted.
 
-### Why this matters
+### Why this may matter
 
-A browser may succeed because of a redirect chain, response-issued state, MIME behavior, CDN transition, or other lifecycle detail that is invisible when only the original request URL and a few request headers are examined.
-
-This milestone begins turning isolated candidate logs into transaction-level evidence.
+Response observation can support both reproduction diagnosis and future MIME-based detection of extensionless/opaque media URLs.
 
 ---
 
@@ -149,11 +237,7 @@ This milestone begins turning isolated candidate logs into transaction-level evi
 
 ### Goal
 
-Move from understanding one media request in isolation to understanding the chain of requests that produced it.
-
-M5.3 should answer:
-
-> What browser/player requests led to this media candidate, and which later requests belong to the same playback flow?
+Move from understanding one media request in isolation to understanding the playback flow around it.
 
 A useful conceptual model is:
 
@@ -171,7 +255,7 @@ media segments
 
 ### Intended relationships
 
-Later logic may correlate requests using browser-provided evidence such as:
+Later logic may correlate requests using evidence such as:
 
 - tab and frame identity;
 - request timing;
@@ -182,59 +266,60 @@ Later logic may correlate requests using browser-provided evidence such as:
 - repeated segment sequences;
 - request IDs and browser lifecycle events.
 
-The goal is not to invent causal relationships from weak guesses. Correlation should be evidence-driven and explainable.
+Correlation must remain evidence-driven and explainable.
 
-### Why this matters
+### Why this may matter
 
-Some servers may authorize a media request only after a previous bootstrap/token/player request. If so, copying only the final manifest URL and common headers will never reproduce the browser's successful flow.
-
-M5.3 is the milestone where the extension begins understanding playback as a graph rather than a list of URLs.
+This layer can eventually help with both hard reproduction cases and candidate-usefulness problems such as Shaka segment floods and master/variant relationships.
 
 ---
 
-# Controlled reproduction after M5.1–M5.3
+# Controlled reproduction philosophy
 
-Once the extension can observe the successful browser transaction and request chain more completely, controlled external reproduction should resume.
+AiDM remains outside the current diagnostic loop while downloader requirements are being isolated.
 
-The rule remains:
+Use direct tools such as yt-dlp for controlled experiments. Only after a requirement is independently proven should AiDM implement it.
 
-> Change one evidence-backed variable at a time. Do not blindly export every browser secret or randomly add headers.
+For reproduction testing:
 
-For hard regression targets, compare the external request against the browser's observed successful flow and identify the minimum sufficient reproduction context.
+> Change one evidence-backed variable at a time.
 
-A failure may ultimately belong to different layers:
+Do not blindly export every browser secret, randomly add headers, or conclude that a single successful/failed attempt establishes a universal rule.
+
+Possible causes of external reproduction failure may include:
 
 - missing request headers;
-- missing session/cookie state;
+- relevant session/cookie state;
 - token freshness;
 - request-chain/bootstrap dependency;
 - redirects;
 - browser/network fingerprinting;
 - downloader protocol behavior;
+- provider/CDN rotation;
+- temporary server policy;
+- network instability;
 - server-side restrictions that cannot be reproduced by the extension.
 
-The extension should gather evidence; it must not claim universal bypass capability.
+The extension should gather evidence. It must not claim universal bypass capability.
 
 ---
 
 # Later detection and product milestones
 
-The deep-traffic phase does not replace the previously identified future work. It adds the evidence needed to implement it correctly.
-
 ## MIME / response-based media detection
 
-Extend detection beyond URL/path/query-extension evidence by using browser-observable response MIME/content type.
+Extend detection beyond URL/path/query-extension evidence using browser-observable response MIME/content type.
 
 This is necessary for opaque or extensionless media URLs.
 
-Examples include:
+Potential evidence includes:
 
 - HLS/DASH MIME types;
 - `video/*`;
 - `audio/*`;
 - other useful media response metadata.
 
-A URL that lacks `.m3u8`, `.mpd`, `.mp4`, or other recognizable suffixes must still be eligible for detection when stronger response evidence exists.
+A URL lacking `.m3u8`, `.mpd`, `.mp4`, or another recognizable suffix must still be eligible for detection when stronger response evidence exists.
 
 ## Opaque/behavioral media detection
 
@@ -251,7 +336,7 @@ This must remain layered and conservative rather than becoming a collection of s
 
 ## Manifest and segment relationship analysis
 
-Address the Shaka-class problem where technically correct `.mp4` segment detection floods the candidate set.
+Address the Shaka-class problem where technically correct segment detection floods the candidate set.
 
 The extension should eventually distinguish or relate:
 
@@ -310,9 +395,7 @@ This metadata supports both candidate ranking and later structured handoff.
 
 ## Cookie/session capability
 
-Cookie support remains part of the architecture even though one test bed proved Referer alone sufficient.
-
-Different servers may require different context.
+Cookie support remains part of the architecture because different servers may require different context.
 
 The preferred architecture is capability-based rather than browser-name-based:
 
@@ -342,15 +425,15 @@ subtitles
 useful metadata
 ```
 
-The exact schema is deliberately deferred until the evidence model stabilizes.
+The exact schema remains deferred until the evidence model stabilizes.
 
 ## AiDM integration
 
-AiDM remains outside the current extension investigation loop while downloader requirements are being isolated with direct tool experiments.
+AiDM remains the downloader layer, not the experimental reproduction test bed.
 
 Once a reproduction method is proven independently, AiDM can implement that known requirement deliberately.
 
-The extension must remain the browser-intelligence/session-handoff layer. AiDM remains responsible for downloading, routing to aria2c/yt-dlp, FFmpeg, merging, naming, and post-processing.
+The extension remains the browser-intelligence/session-handoff layer. AiDM remains responsible for downloading, routing to aria2c/yt-dlp/FFmpeg, merging, naming, and post-processing.
 
 ---
 
@@ -362,40 +445,79 @@ The project should keep multiple classes of regression targets because no one we
 - Shaka-class targets for segment-flood/manifest relationships;
 - wrapped/proxy URL targets for embedded media detection;
 - Referer-dependent targets for basic request-context reproduction;
-- hard protected targets where basic headers/session/impersonation remain insufficient;
+- volatile multi-provider platforms for robustness testing without overfitting;
+- future reproducibly protected targets where basic context is demonstrably insufficient;
 - future opaque/extensionless targets for MIME and behavioral detection;
 - subtitle-rich players for subtitle association.
 
-A target website is evidence, not architecture. No implementation should be hardcoded to a regression site's hostname or provider.
+A target website is evidence, not architecture.
+
+No implementation should be hardcoded to a regression site's hostname or provider.
+
+Most importantly:
+
+> A single failed stream attempt is evidence for investigation, not evidence for architecture.
 
 ---
 
 # Branch checkpoint
 
-`dev/01-foundation` is the known-good foundation line.
+`dev/01-foundation` is the known-good tested foundation line.
 
-Starting with M5.1, deeper traffic-intelligence development should occur on a new branch created directly from the completed foundation checkpoint.
+`dev/02-traffic-intelligence` is reserved for the next deeper phase, but its existence does not force immediate M5.1 implementation.
 
-The purpose of this branch split is to protect the tested foundation from higher-risk work involving deeper request metadata, response lifecycle correlation, and request-chain analysis.
+The purpose of the split is to protect the working foundation while leaving a safe place for higher-risk traffic-intelligence experiments when the evidence justifies them.
 
-If the new phase becomes unstable, the project must always be able to return to `dev/01-foundation` as the last known-good implementation of the foundational capabilities.
+At the current checkpoint, the recommended workflow is:
+
+```text
+keep dev/01-foundation stable
+        ↓
+stress-test M4 / M4.1 / M5
+        ↓
+classify reproducible failure
+        ↓
+choose the smallest evidence-backed next milestone
+        ↓
+implement on dev/02-traffic-intelligence
+```
 
 ---
 
 # Long-term architectural checkpoint
 
-The project has now graduated through three levels of understanding:
+The project has already progressed through:
 
 ```text
-URL detection
+raw traffic observation
         ↓
-request-context observation
+tab-aware filtering
         ↓
-traffic/request-chain understanding
+media-candidate detection
+        ↓
+embedded media evidence detection
+        ↓
+basic request-context observation
 ```
 
-The next goal is not merely to capture more URLs.
+The next goal is **not automatically** to capture more data.
 
-> AIDM Stream Inspector should understand enough of the browser's successful media transaction to explain what the useful candidate is, how it was reached, what context accompanied it, and what evidence AiDM later needs to reproduce it.
+The next goal is to determine, through reproducible testing, which missing capability provides the most useful generic improvement.
 
-This intelligence must remain generic, cross-browser, evidence-driven, privacy-conscious, and independent of any single streaming website.
+Possible future progression remains:
+
+```text
+response/MIME evidence
+        ↓
+deep request metadata
+        ↓
+request/response lifecycle
+        ↓
+playback relationship graph
+        ↓
+ranking + subtitles + structured handoff
+```
+
+AIDM Stream Inspector should become more intelligent by learning from reproducible browser evidence, not by accumulating site-specific fixes or reacting to transient failures.
+
+That principle is now part of the project's architecture.
