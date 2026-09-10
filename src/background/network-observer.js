@@ -19,7 +19,7 @@ function detectTargetTabCandidate(details) {
   console.log(
     `[AIDM Candidate][${candidateEvidence.type}]\n`
     + `URL: ${details.url}\n`
-    + `Priority score: ${ranking.score} (higher = likely more useful)\n`
+    + `Priority: ${getPriorityLabel(ranking.score)} (${ranking.score})\n`
     + `Ranking path source: ${candidateEvidence.source}\n`
     + `Ranking evidence:\n${ranking.evidence.map((item) =>
       `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
@@ -31,6 +31,19 @@ function detectTargetTabCandidate(details) {
     + `Authorization: ${getHeaderPresence(requestHeaders, "authorization")}\n`
     + `Range: ${getHeaderValue(requestHeaders, "range")}`
   );
+}
+
+function getPriorityLabel(score) {
+  // Presentation bands for current M6 scores, not confirmed manifest roles.
+  if (score >= 70) {
+    return "HIGH";
+  }
+
+  if (score >= 40) {
+    return "MEDIUM";
+  }
+
+  return "LOW";
 }
 
 function findHeader(requestHeaders, headerName) {
