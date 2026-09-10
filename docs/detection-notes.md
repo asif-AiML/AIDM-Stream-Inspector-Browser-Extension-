@@ -1,8 +1,10 @@
 # AIDM Stream Inspector — Detection Notes
 
-This document records real-world detection tests, observed behavior, failures, and lessons that should guide later candidate detection and ranking work.
+This document records real-world detection tests, observed behavior, failures, corrections, and lessons that should guide later candidate detection, ranking, and subtitle work.
 
 Sensitive session values, signed tokens, and full live URLs containing credentials/tokens must not be preserved here. Test URLs are described structurally or redacted where necessary.
+
+---
 
 ## M4 — Obvious media candidate detection
 
@@ -10,88 +12,39 @@ Sensitive session values, signed tokens, and full live URLs containing credentia
 
 M4 is the first conservative media-detection layer. It classifies obviously media-like target-tab requests from URL/path evidence such as HLS manifests, DASH manifests, direct video files, and common audio files.
 
-M4 does **not** decide which candidate is best, does not understand master-vs-variant relationships, does not suppress media segments, and does not capture browser session context.
+M4 does **not** decide which candidate is best, understand master-vs-variant relationships, suppress media segments, or capture browser session context.
 
-The tests below were therefore evaluated using the question:
+The main question for M4 is:
 
-> Did the extension correctly recognize obvious media candidates from the target tab while preserving the exact request URL?
+> Did the extension correctly recognize obvious media candidates while preserving the exact request URL?
 
-They were **not** evaluated using the stronger question:
+### soap2dayhd.net / alternate mirrors
 
-> Did the extension already identify the final stream AiDM should download?
+The extension detected HLS requests whose pathname contained `master.m3u8` followed by signed query parameters.
 
----
-
-## Test 1 — soap2dayhd.net and alternate playback mirrors
-
-### Observation A — HLS URL with signed query parameters
-
-The extension detected an HLS request whose pathname contained `master.m3u8`, followed by a long signed query string containing a token.
-
-Structurally, the request looked like:
+Structurally:
 
 ```text
 https://<cdn-host>/<opaque-path>/master.m3u8?token=<redacted>
 ```
 
-The complete request did not literally end with `.m3u8` because query parameters followed the manifest filename.
+The extension correctly classified the request as HLS while preserving the exact signed URL.
 
-Result:
+The same user-visible media could also switch to a different CDN/server with a different physical HLS URL. This confirmed that detection must not depend on one hostname or URL shape.
 
-- classified as `[AIDM Candidate][HLS]`;
-- worked in both Firefox and Brave;
-- the captured URL played successfully in VLC at test time;
-- AiDM also began downloading it without additional browser-session context at test time.
+Subtitles were available in the player, but the captured HLS URL did not itself provide subtitle files. This was early evidence that subtitle discovery needs its own layer.
 
-This validates an important M4 implementation detail: classification must inspect the URL pathname (or equivalent URL component) while preserving the original signed URL including its query string.
+### StreamTape / StreamWish
 
-It does **not** prove that browser-session context is universally unnecessary. It proves only that this particular captured URL was independently usable during this test.
-
-### Observation B — same media through a different server
-
-Switching the playback server/mirror produced a different physical media URL on another host. This request ended directly in:
-
-```text
-/master.m3u8
-```
-
-The extension again classified it as HLS.
-
-This demonstrates that the same user-visible movie can be delivered by different CDNs/servers with very different URL structures while remaining the same broad stream type.
-
-Candidate classification therefore cannot depend on one site's URL shape or hostname.
-
-### Subtitle observation
-
-The web player had working subtitles, but the captured HLS URL used for VLC/AiDM did not itself provide the subtitles in the test.
-
-This reinforces the existing architecture: subtitle discovery is a separate future responsibility. A successfully captured video stream should not be assumed to contain the page/player's subtitle tracks.
-
----
-
-## Test 2 — StreamTape and StreamWish mirrors
-
-### StreamTape
-
-The extension detected a direct-video request on a StreamTape CDN. Its filename contained a compound-looking suffix similar to:
+StreamTape exposed a direct-video request with a compound-looking filename such as:
 
 ```text
 <Movie.Name>.mkv.mp4?stream=1
 ```
 
-Result:
+The extension classified it as VIDEO and the captured request was usable in testing.
 
-- classified as `[AIDM Candidate][VIDEO]`;
-- played successfully in VLC at test time;
-- old Stream Detector had previously failed to expose a useful StreamTape media request during earlier testing.
-
-This is a useful M4 win: straightforward direct-video classification found a usable request in a case where the previous detector had been unreliable.
-
-Again, this does not yet establish why the older detector failed on the earlier attempt; it only records that the new extension successfully observed and classified the request in this test.
-
-### StreamWish
-
-The same user-visible media played through StreamWish generated multiple HLS candidates, including structurally:
+StreamWish exposed multiple HLS candidates such as:
 
 ```text
 .../master.m3u8
@@ -99,142 +52,69 @@ The same user-visible media played through StreamWish generated multiple HLS can
 .../index-a1.m3u8
 ```
 
-Result:
+All were correctly detected as HLS, but they were not equally useful. Later tests also reinforced that some child/variant-looking playlists can represent partial or less useful playback pieces.
 
-- all were correctly recognizable as HLS candidates;
-- the extension intentionally did not choose among them;
-- one `master.m3u8` test did not start playback in VLC, although VLC did not immediately produce a clear error;
-- AiDM began processing/downloading that manifest during the test.
+Important lesson:
 
-This is an important distinction:
+> Correct media classification does not mean every candidate is equally useful.
 
-> Correct media classification does not guarantee that every detected candidate is equally useful, independently playable, or the correct final choice.
+Do not hardcode a filename such as `v1-a1` as universally bad; it is regression evidence only.
 
-Multiple related HLS requests are expected in adaptive streaming. Determining master playlists, media playlists, audio/video variants, and the best handoff candidate belongs to later analysis/ranking milestones.
+### Shaka Player
+
+Shaka playback exposed many direct `.mp4` fragment candidates resembling successive video/audio chunks.
+
+These were technically media but poor user-facing choices compared with higher-level manifests.
+
+This became the strongest early evidence that:
+
+> Detection quantity is not detection quality.
+
+It also demonstrated adaptive audio/video separation: a full-duration video candidate can still be silent if the audio rendition is separate.
+
+### Plex correction
+
+Earlier assumptions treated Plex as a likely session-dependent failure. Retesting showed useful Plex HLS candidates could play/download without manually supplied browser-session context.
+
+This corrected an important testing mistake and established a project-wide rule:
+
+> One failed reproduction attempt is not sufficient evidence for architecture.
+
+### M4 verdict — PASS
+
+M4 established the deterministic media-detection baseline:
+
+- obvious HLS detection;
+- signed-query preservation;
+- direct-video detection;
+- multiple candidates surfaced rather than prematurely chosen;
+- Firefox + Brave compatibility;
+- no site-specific detection logic.
 
 ---
 
-## Test 3 — Shaka Player demo streams
+## M4.1 — Query-embedded media evidence
 
-This was the most important M4 limitation test.
+Averotv-style playback exposed a useful HLS request whose outer pathname did not contain `.m3u8`.
 
-During playback, the extension console filled continuously with direct-video candidates resembling:
+Structurally:
 
 ```text
-.../v-0144p-0100k-libx264-s19.mp4
-.../a-eng-0128k-aac-2c-s19.mp4
-.../v-0144p-0100k-libx264-s20.mp4
-.../a-eng-0128k-aac-2c-s20.mp4
+https://<worker-host>/hls?url=https%3A%2F%2F<upstream-host>%2F...%2Findex.m3u8&provider=<value>
 ```
 
-The `s19`, `s20`, `s21`, etc. pattern corresponded to successive media segments/chunks.
+The outer request itself was useful, but the media evidence lived inside an encoded query-parameter value.
 
-Individual segment URLs were small (KB-scale when downloaded) and were not useful standalone media choices.
+M4.1 solved this generically by:
 
-Meanwhile, the old Stream Detector exposed higher-level HLS playlist candidates such as variant playlists and the top-level `hls.m3u8`, which were more useful from a user's perspective.
+- inspecting query-parameter values for obvious media evidence;
+- safely decoding for classification evidence;
+- preserving the exact original outer browser request as the candidate URL;
+- avoiding hostname/provider/parameter-name hardcoding.
 
-### What this test proves
+### M4.1 verdict — PASS
 
-M4 is functioning according to its narrow definition: `.mp4` requests are obvious media candidates.
-
-However, M4 currently has no understanding of whether an `.mp4` request is:
-
-- a complete downloadable video;
-- one video segment;
-- one audio segment;
-- one rendition in an adaptive stream;
-- part of a larger manifest-controlled playback graph.
-
-Therefore obvious extension matching alone can create heavy candidate noise even while technically classifying media correctly.
-
-### Future direction exposed by Shaka
-
-Later milestones need mechanisms that can distinguish or relate:
-
-- manifests vs segments;
-- complete direct files vs fragmented media;
-- video vs audio renditions;
-- repeated sequential segment patterns;
-- candidates belonging to the same playback session;
-- higher-level manifests that should rank above their hundreds of child segments.
-
-Candidate suppression/deduplication/ranking should be designed from this evidence rather than added blindly to M4.
-
-### Audio/video separation observation
-
-A higher-level HLS link captured by the old detector produced a full-duration video download during testing but had no audible sound.
-
-This is consistent with adaptive media where audio and video can be separate renditions. The test does not by itself identify the exact playlist role, but it confirms that "full-duration playable/downloadable candidate" still does not necessarily mean "complete audiovisual result".
-
-Future ranking/manifest analysis must therefore avoid equating duration or successful download with completeness.
-
----
-
-## Test 4 — Plex
-
-Earlier project notes had treated Plex as an example where the old Stream Detector failed and where browser-session context might be required.
-
-The M4 reproduction test corrected that assumption.
-
-The extension detected several Plex media candidates, structurally including:
-
-```text
-https://watch.plex.tv/videos/auto-play-sample.mp4
-https://vod.provider.plex.tv/...-hls.m3u8?<plex-query-parameters-redacted>
-https://vod-content.plexvideos.com/.../stream_4.m3u8
-https://vod-content.plexvideos.com/.../stream_1.m3u8
-```
-
-The old Stream Detector was then retested on the same Plex playback and exposed essentially the same useful media candidates.
-
-A `stream_4.m3u8` candidate:
-
-- played in VLC during the test;
-- began downloading through AiDM without manually supplied browser-session context;
-- produced intermittent HTTPS read-timeout retries during the AiDM download.
-
-### Corrected conclusion
-
-The previous Plex failure should no longer be used as evidence that the old detector inherently fails on Plex or that Plex necessarily requires browser-session handoff for these media URLs.
-
-The earlier test was likely flawed, stale, or otherwise not equivalent to the successful reproduction.
-
-This correction is important because architecture should be based on reproducible evidence rather than remembered one-off failures.
-
-### Remaining Plex question
-
-Plex produced multiple plausible HLS variants such as `stream_1.m3u8` and `stream_4.m3u8`.
-
-M4 intentionally cannot answer which one is the best user-facing candidate.
-
-That ambiguity is evidence for later metadata/relationship/ranking work, not an M4 defect.
-
----
-
-## M4 overall verdict — PASS
-
-M4 passed its intended goal.
-
-Verified behaviors from these tests:
-
-- obvious HLS candidates are detected;
-- HLS detection works when `.m3u8` is followed by signed query parameters;
-- exact signed/tokenized URLs can be preserved while classification inspects their path;
-- direct-video requests are detected;
-- the same playback can expose different candidate types/URL structures on different mirrors;
-- multiple related HLS candidates are surfaced rather than prematurely choosing one;
-- Firefox and Brave both detected the tested candidates;
-- real-world StreamTape detection succeeded where the previous detector had previously been unreliable.
-
-M4 also exposed important limitations that are intentionally outside its scope:
-
-- segmented `.mp4` traffic can flood the candidate stream;
-- candidate detection is not candidate usefulness;
-- manifests should eventually be related to their child segments;
-- master/variant/audio/video roles are not yet understood;
-- multiple HLS variants require later ranking/metadata;
-- subtitles require separate discovery;
-- successful raw-URL playback/download does not prove browser-session context is unnecessary in general.
+The averotv regression target became detectable as HLS while M5 request context continued to flow naturally.
 
 ---
 
@@ -242,248 +122,294 @@ M4 also exposed important limitations that are intentionally outside its scope:
 
 ### Milestone verdict — PASS
 
-M5 successfully associated browser-observed request context with M4 HLS candidates on the movi.pk regression target in both Firefox and Brave/Chromium.
+M5 associates browser-observed request context with media candidates.
 
-For the same class of detected HLS request, the extension reported:
+Observed fields include:
 
 - exact candidate URL;
-- browser User-Agent;
+- User-Agent;
 - Referer;
 - Origin when exposed;
 - Cookie presence state;
 - Authorization presence state;
 - Range presence state.
 
-The most important validation was that the extension-observed Referer matched the Referer previously exposed by the older Stream Detector and independently proven sufficient in the movi.pk ablation study.
+### movi.pk reproduction ablation
 
-No site-specific hostname logic was required.
-
-### Cross-browser observation
-
-Firefox and Brave both exposed the same useful Referer for the tested candidate, but Origin differed:
-
-- Firefox reported Origin as `null`/not present for the tested request;
-- Brave/Chromium reported the embedded-player origin.
-
-Cookies, Authorization, and Range were not observed on the tested request in either browser.
-
-This is useful evidence that request-context fields are not guaranteed to appear identically across browser engines or request paths. The extension must continue to report what the browser actually exposes rather than fabricate missing values or assume one browser's header set is universal.
-
-The absence of Cookie on this request is also consistent with the movi.pk ablation result: the tested reproduction did not require cookies once the correct Referer was supplied. This does **not** imply cookies are globally unnecessary for other sites.
-
-### M5 checkpoint
-
-The project has now demonstrated a generic capability:
-
-> AIDM Stream Inspector can detect a media candidate and recover reproduction-relevant request context, including the Referer that made an otherwise failing movi.pk HLS request externally reproducible.
-
-This is broader than a movi.pk-specific fix and validates the candidate-context layer of the architecture.
-
----
-
-## New detection gap — averotv.top / query-embedded HLS
-
-A new real-world test target exposed a different problem: **candidate detection failure, not browser-session reproduction failure**.
-
-During playback on `https://averotv.top`, AIDM Stream Inspector produced no media candidate at all, while the older Stream Detector exposed a useful HLS request.
-
-Structurally, the request looked like:
+A controlled reproduction study established:
 
 ```text
-https://<worker-host>/hls?url=https%3A%2F%2F<upstream-host>%2F<opaque-path>%2Findex.m3u8&provider=<value>
+URL only                              → fail
+URL + Referer + UA + cookies          → success
+URL + Referer + UA                    → success
+URL + Referer                         → success
 ```
 
-The important detail is that the **outer request pathname is only `/hls`**. The actual `.m3u8` manifest URL is URL-encoded inside a query-parameter value.
+Therefore the minimum experimentally proven sufficient context for that specific test was Referer.
 
-Therefore M4's conservative pathname-extension detector has no obvious `.m3u8` suffix to match and correctly misses the request under its current rules.
+This validated M5 without implying that Referer is universally sufficient.
 
-This is not evidence that network observation failed. It is evidence that the current classifier looks only at the outer URL/path shape and does not yet recognize media URLs embedded inside query parameters.
+### fboxtv correction
 
-### External reproduction result
+One testing period produced repeated 403 failures even when external yt-dlp tests included combinations of:
 
-The regular captured outer URL was handed to AiDM and AiDM began downloading it without browser-session context.
+- Referer;
+- User-Agent;
+- Origin;
+- browser cookies;
+- browser impersonation.
 
-This establishes that the missed request was practically useful and that the immediate defect is discovery/classification, not session handoff.
+A later fresh test on the same platform family succeeded with conventional browser-derived context.
 
-The older detector's generated yt-dlp command also reached HLS processing and enumerated fragments. Its eventual failure was:
+The remaining errors were fragment read timeouts/retries while downloading continued.
 
-```text
-[Errno 36] File name too long
-```
+Therefore fboxtv is currently classified as a **volatile regression target**, not proof of a hidden browser-only requirement.
 
-This error was caused by yt-dlp deriving an excessively long output filename from the long query-embedded URL. It is **not** evidence of authentication/session rejection.
+This reinforces the testing rule:
 
-The live-HLS warning shown before that error is a separate downloader-behavior concern and does not explain why AIDM Stream Inspector missed the request.
-
-### Architectural lesson
-
-This test adds a concrete detection class beyond simple pathname extensions:
-
-> A request can itself be a useful HLS endpoint even when `.m3u8` appears only inside an encoded query-parameter value rather than in the outer request pathname.
-
-Future detection should therefore consider **query-embedded media evidence** without hardcoding `averotv.top`, `provider=vaplayer`, `/hls`, or a particular parameter name such as `url=`.
-
-Any such classifier must preserve the exact original outer request URL for later handoff. It may decode query-parameter values for evidence/classification, but must not replace the captured request with the inner decoded URL unless a later, explicitly designed milestone proves that is the correct handoff behavior.
-
-This test should remain a regression target because it cleanly distinguishes:
-
-- network observation works;
-- raw outer request is useful/downloadable;
-- M4 pathname-extension classification misses it;
-- session context is not the immediate issue.
-
----
-
-## Browser-session requirement — revised testing rule
-
-The M4 tests showed that several captured URLs from the current test bed were usable directly in VLC/AiDM without manually supplying cookies, Referer, User-Agent, or other browser-session data.
-
-This must **not** be generalized into:
-
-> The extension does not need browser-session capture.
-
-The current test bed simply did not provide strong evidence for that requirement.
-
-A proper future browser-session test should use a controlled comparison where:
-
-1. playback succeeds inside the browser;
-2. the exact captured media URL fails when replayed outside the browser with no session context;
-3. the relevant browser-observable context is captured;
-4. replay succeeds, or materially changes behavior, when the required context is supplied.
-
-Only such a paired test can demonstrate that a particular server actually depends on browser/session state.
-
----
-
-## Regression-test-bed lessons
-
-The current tests suggest maintaining different classes of targets rather than relying on one website:
-
-- **controlled standards/demo target:** Shaka Player, useful for deterministic HLS/DASH and segment behavior;
-- **real-world multi-mirror targets:** useful for varying CDN/player behavior and messy candidate sets;
-- **Plex/public mature platform:** useful for multiple manifest variants and reproducibility checks;
-- **movi.pk regression target:** useful for request-context observation and Referer-dependent external reproduction;
-- **averotv.top regression target:** useful for query-embedded HLS detection where the outer path does not expose `.m3u8`.
-
-Shaka should remain particularly important because it exposed a weakness that simple success-only tests would have missed: an extension can "detect lots of media" while producing a worse user-facing candidate set than a detector that understands manifests and segment relationships.
-
----
-
-## Long-term checkpoint
-
-The combined lessons are now:
-
-> Detection quantity is not detection quality, and media evidence may exist outside the outer URL pathname.
-
-M4 establishes the deterministic baseline. M5 proves request-context association. Future detection layers should add query-embedded, MIME/response, and behavioral evidence without destroying the simple baseline or hardcoding individual websites.
+> A single failure is evidence for investigation, not evidence for architecture.
 
 ---
 
 ## M6 — Candidate ranking foundation
 
-M6 adds passive, per-candidate ranking after detection and before console output.
-`src/core/candidate-ranker.js` returns `{ score, evidence }`; each evidence item
-contains a stable `code`, numeric `weight`, and explanatory `reason`. The score
-is the sum of those contributions. Higher scores indicate estimated usefulness,
-not confidence percentages, confirmed manifest roles, or replay guarantees.
+### Why M6 existed
 
-The detector retains its type-or-null API and matching order. Its additional
-evidence API exposes the type, selected pathname, and path source so the ranker
-can inspect the same M4/M4.1 evidence without duplicating query parsing. The
-selected pathname is inspection evidence only: the observer still logs the exact
-outer request URL and that request's unchanged M5 context.
-When a raw query value already matches an extension but contains encoded path
-separators, the evidence API prefers its once-decoded path only if that path
-confirms the same type. This exposes useful filename boundaries without changing
-the existing raw-first classification result or adding another decoding pass.
+Multiple independent tests converged on the same problem:
 
-### Current evidence and weights
+- Shaka produced large numbers of low-value media fragments;
+- StreamWish exposed several HLS candidates with unequal usefulness;
+- adaptive streams could expose separate video-only and audio-only renditions;
+- a higher-level manifest could potentially preserve the complete adaptive playback structure.
+
+M6 therefore introduced ranking after detection rather than suppressing candidates inside the detector.
+
+Core separation:
+
+```text
+Detection → Is this media?
+Ranking   → How useful is this candidate likely to be?
+```
+
+### Implementation model
+
+`src/core/candidate-ranker.js` returns ranking information based on explainable evidence.
+
+The score is an estimated usefulness score, not a confidence percentage, confirmed manifest role, or replay guarantee.
+
+Current evidence includes conservative path/filename clues such as:
 
 | Evidence | Contribution |
 | --- | ---: |
-| Detected HLS or DASH manifest candidate; role unconfirmed | +60 |
-| Detected VIDEO or AUDIO candidate; completeness/fragment role unknown | +30 |
-| HLS filename contains a delimited `master` token | +30 |
-| HLS filename is `playlist.m3u8`, or its immediate directory is exactly `playlist` | +10 |
-| HLS filename contains a delimited `video` token or a 3–4 digit `p` quality-shaped token | -10 |
-| HLS filename contains a delimited `audio` token | -20 |
-| Unknown or conflicting HLS role naming | 0 |
+| HLS or DASH adaptive manifest candidate; role unconfirmed | +60 |
+| VIDEO or AUDIO candidate; completeness unknown | +30 |
+| Delimited `master` token in HLS filename | +30 |
+| Playlist-like HLS filename/immediate directory clue | +10 |
+| Video/quality-rendition-like HLS filename | -10 |
+| Audio-rendition-like HLS filename | -20 |
+| Unknown/conflicting role naming | 0 |
 
-Naming checks ignore case. Token boundaries are filename start/end, hyphen,
-underscore, or dot; substrings such as `remastered` do not match `master`.
-Only one naming contribution applies. Master takes precedence over playlist
-when both appear. High-level plus rendition clues conflict and receive no naming
-adjustment; combined audio/video clues also receive no naming adjustment.
-Ancestor directories, hostnames, parameter names, unrelated query values, and
-request headers do not contribute to ranking. A quality-shaped token is only a
-rendition clue; M6 does not extract or validate resolution metadata.
+These clues are deliberately weak and generic. No site/provider hostname and no `v1-a1` penalty is hardcoded.
 
-Structural examples (synthetic paths, not captured session data):
+### Real-world cinejoy ranking test — PASS
 
-| Candidate path | Expected score |
-| --- | ---: |
-| `/master.m3u8` | 90 |
-| `/playlist/opaque-id.m3u8` | 70 |
-| `/index.m3u8`, `/index-v1-a1.m3u8`, `/index-a1.m3u8` | 60 |
-| `/manifest.mpd` | 60 |
-| `/video/video_720p.m3u8`, `/video/video_1080p.m3u8` | 50 |
-| `/hls/audio_1.m3u8` | 40 |
-| `/movie.mp4`, `/v-0144p-0100k-libx264-s19.mp4`, `/track.mp3` | 30 |
-| `/playlist/video_1080p.m3u8`, `/audio_video.m3u8` | 60 (conflicting/ambiguous naming) |
+A cinejoy playback exposed structurally:
 
-An encoded query-embedded `/master.m3u8` receives the same 90 score when it is
-the pathname selected by M4.1. An outer media pathname still takes precedence.
-For multiple embedded candidates, the existing first-match order remains in
-effect; unrelated later query values cannot boost the score.
+```text
+/playlist/<opaque-id>.m3u8
+/video/.../video_720p.m3u8
+/video/.../video_1080p.m3u8
+/hls/.../audio_1.m3u8
+```
 
-### Manual validation — Firefox first, Brave second
+The ranking system produced the expected relative order:
 
-1. Reload the extension, open its background console, and return focus to the
-   normal browser window containing the intended playback tab. Confirm target
-   updates and candidate logs without module-loading errors.
-2. Play existing HLS, DASH, video, and audio regression targets. Each previously
-   detected candidate should still appear, now with `Priority score`,
-   `Ranking path source`, and signed evidence contributions. Verify User-Agent,
-   Referer, Origin, and Range still reflect the same request; Cookie and
-   Authorization remain presence-only, with unavailable fields `not observed`.
-3. Compare parent `/playlist/<id>.m3u8` against `video_720p.m3u8`,
-   `video_1080p.m3u8`, and `audio_1.m3u8` when playback emits these shapes.
-   Expect 70, 50, 50, and 40 respectively. Compare `master.m3u8` (90) with
-   `index-v1-a1.m3u8` and `index-a1.m3u8` (both neutral-role 60).
-4. Repeat the wrapped/proxy HLS regression. Expect an HLS log with
-   `query-embedded pathname` as the ranking path source and the exact original
-   outer URL, including its encoding, query order, and signed values. Naming
-   evidence should come from the selected inner media path.
-5. Play the segmented-media regression. Individual `.mp4` candidates must
-   remain visible at 30; any detected HLS/DASH manifests should score higher.
-   Flood reduction and identification of individual segments are not implemented.
-6. Switch target tabs while traffic continues in the previous tab. Only the
-   current target's requests should produce candidate logs. In Brave, also
-   allow the worker to idle with DevTools closed, then switch tabs and resume
-   playback to check existing target reconstruction and module loading.
+```text
+parent/playlist-like HLS   → 70
+video rendition            → 50
+audio rendition            → 40
+direct video candidates    → 30
+```
 
-### Limits and deferred work
+The 70-point candidate did **not** literally contain `master` in the URL. Its ranking came from generic adaptive-manifest + playlist-like evidence.
 
-M6 does not fetch/parse manifests, prove parent-child links, group playback
-sessions, sort console history, deduplicate, suppress candidates, or persist
-scores. A complete direct file can be more useful than a manifest despite this
-initial manifest preference. Filename clues can be misleading; ties and unknown
-roles are intentional. No provider-specific rules or `v1-a1` penalty exist.
+### External validation of the 70-point candidate
 
-Stronger role/relationship evidence, MIME detection, request correlation,
-segment behavior, subtitles, languages, titles, bitrate/resolution/codec
-metadata, UI, export, and downloader integration remain deferred. Later ranking
-work can add evidence contributions without putting scoring into the detector.
+The highest-ranked candidate was passed directly to yt-dlp with the required browser-derived request context.
 
-The ranker uses plain JavaScript and no browser APIs or mutable session state.
-It is loaded before observer registration through the existing Firefox and
-Chromium bootstrap paths; permissions and manifest configuration are unchanged.
-Existing documented MV3 manifest warnings and browser header-exposure differences
-still apply. Actual Firefox/Brave M6 validation remains pending owner testing.
+A format inspection showed:
 
-Local validation passed: JavaScript syntax checks, 6,000 classification
-comparisons against the pre-M6 detector, synthetic ranking/ambiguity checks,
-unchanged M5 log-content checks (apart from added ranking lines), exact URL and
-sensitive-header redaction checks, target-tab isolation, and mocked Firefox and
-Chromium loading with both header-registration paths. These are tool/mock checks,
-not actual browser or website playback tests. No test framework was added.
+```text
+audio-only track
+360p video-only
+720p video-only
+1080p video-only
+```
+
+Downloading from the parent candidate caused yt-dlp to select a combined adaptive format similar to:
+
+```text
+6000+audio-Track_1
+```
+
+The completed output was then independently validated:
+
+- ffprobe confirmed an audio stream;
+- FFmpeg `astats` returned real non-silent peak levels around -4 dB;
+- playback contained working audio.
+
+Therefore the ranking system successfully placed the more structurally useful parent candidate above the separate video-only and audio-only child renditions.
+
+This is an important milestone result:
+
+> Ranking solved multiple previously separate-looking problems by putting the higher-level adaptive manifest in the spotlight.
+
+It avoided selecting a silent video-only rendition while preserving yt-dlp's ability to discover and combine the associated audio rendition.
+
+### M6 verdict — PASS
+
+M6 is now validated both structurally and through a completed real-world audiovisual download.
+
+---
+
+## M6.1 — Ranking presentation cleanup
+
+The first M6 console wording printed:
+
+```text
+Priority score: 30 (higher = likely more useful)
+Priority score: 70 (higher = likely more useful)
+```
+
+The parenthetical phrase described the scale but was misleading when repeated beside every candidate.
+
+M6.1 changed presentation to readable priority labels such as HIGH / MEDIUM / LOW while keeping the numeric score and ranking evidence.
+
+This makes the intended candidate much easier to recognize during manual testing.
+
+Ranking weights and detection behavior remain unchanged.
+
+### M6.1 verdict — PASS
+
+Manual testing confirmed the new labels are easier to interpret.
+
+---
+
+## Ranking-related issue still pending — duplicate range requests
+
+Testing also exposed repeated identical direct-video URLs with different `Range` values, for example:
+
+```text
+Range: bytes=0-
+Range: bytes=<later offset>-
+Range: bytes=<later offset>-
+```
+
+These are repeated byte-range requests for the same media resource rather than genuinely distinct media candidates.
+
+This suggests a future deduplication milestone.
+
+Important distinction:
+
+```text
+low-ranked unique candidate → keep
+exact repeated candidate    → deduplication candidate
+```
+
+Do not make low ranking equivalent to detection suppression.
+
+A future UI can spotlight the preferred candidate and collapse lower-ranked alternatives rather than deleting them.
+
+---
+
+# Subtitle discovery — newly classified test problem
+
+Subtitle testing has now exposed at least two useful classes.
+
+## Class 1 — explicit subtitle resources
+
+Some streaming players expose subtitles in the UI and also issue obvious subtitle network requests such as `.srt` or similar resources.
+
+The older Stream Detector can detect these on some platforms, while AIDM Stream Inspector currently cannot because subtitle candidate classification has not yet been implemented.
+
+This is the deterministic basic subtitle problem and should be solved first.
+
+## Class 2 — subtitles visible in the player but no obvious `.srt` entry
+
+Other platforms expose subtitle choices in the player UI, yet the older Stream Detector does not reveal an obvious `.srt` candidate.
+
+Possible causes include:
+
+- WebVTT rather than SRT;
+- extensionless subtitle endpoints;
+- subtitle URLs inside API/JSON responses;
+- HLS master-manifest subtitle declarations;
+- DASH text adaptations;
+- HTML `<track>` elements;
+- player configuration data;
+- subtitle requests triggered only after selecting a language;
+- cues transformed/generated by the player.
+
+This creates a two-stage subtitle roadmap:
+
+```text
+M7   obvious subtitle candidate detection
+M7.1 subtitle metadata + association
+M7.2 deep subtitle discovery
+```
+
+The goal is first to match the old detector where explicit subtitle resources are exposed, then attempt to exceed it using generic browser-observable evidence on harder players.
+
+No site-specific subtitle rule should be added.
+
+---
+
+# Current regression-test philosophy
+
+Maintain several target classes because one platform cannot exercise every problem:
+
+- Shaka-style targets for segment floods and adaptive relationships;
+- StreamWish-style targets for multiple HLS candidates;
+- cinejoy-style targets for parent manifest + separate video/audio renditions;
+- wrapped/proxy targets for query-embedded media evidence;
+- movi.pk-style targets for Referer-dependent reproduction;
+- volatile multi-provider targets such as fboxtv for robustness testing without overfitting;
+- subtitle-rich players where explicit subtitle files are exposed;
+- subtitle-rich players where no obvious subtitle resource is exposed.
+
+Most importantly:
+
+> Real-world test websites provide evidence. They must never become hardcoded architecture.
+
+---
+
+# Current long-term checkpoint
+
+The project has progressed through:
+
+```text
+network observation
+      ↓
+tab-aware filtering
+      ↓
+media detection
+      ↓
+query-embedded media detection
+      ↓
+request-context observation
+      ↓
+candidate ranking
+      ↓
+subtitle discovery ← next
+```
+
+The strongest new lesson from M6 is that a higher-level adaptive manifest can function as a map of the playback asset rather than merely another `.m3u8` URL.
+
+Where the stream is authored accordingly, such a parent manifest may describe:
+
+- multiple video qualities;
+- separate audio renditions;
+- alternate audio languages;
+- subtitle renditions.
+
+This makes master/parent manifests strategically important for later media metadata, multi-audio, subtitle association, and structured handoff.
