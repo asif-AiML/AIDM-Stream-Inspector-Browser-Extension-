@@ -376,3 +376,114 @@ The combined lessons are now:
 > Detection quantity is not detection quality, and media evidence may exist outside the outer URL pathname.
 
 M4 establishes the deterministic baseline. M5 proves request-context association. Future detection layers should add query-embedded, MIME/response, and behavioral evidence without destroying the simple baseline or hardcoding individual websites.
+
+---
+
+## M6 — Candidate ranking foundation
+
+M6 adds passive, per-candidate ranking after detection and before console output.
+`src/core/candidate-ranker.js` returns `{ score, evidence }`; each evidence item
+contains a stable `code`, numeric `weight`, and explanatory `reason`. The score
+is the sum of those contributions. Higher scores indicate estimated usefulness,
+not confidence percentages, confirmed manifest roles, or replay guarantees.
+
+The detector retains its type-or-null API and matching order. Its additional
+evidence API exposes the type, selected pathname, and path source so the ranker
+can inspect the same M4/M4.1 evidence without duplicating query parsing. The
+selected pathname is inspection evidence only: the observer still logs the exact
+outer request URL and that request's unchanged M5 context.
+When a raw query value already matches an extension but contains encoded path
+separators, the evidence API prefers its once-decoded path only if that path
+confirms the same type. This exposes useful filename boundaries without changing
+the existing raw-first classification result or adding another decoding pass.
+
+### Current evidence and weights
+
+| Evidence | Contribution |
+| --- | ---: |
+| Detected HLS or DASH manifest candidate; role unconfirmed | +60 |
+| Detected VIDEO or AUDIO candidate; completeness/fragment role unknown | +30 |
+| HLS filename contains a delimited `master` token | +30 |
+| HLS filename is `playlist.m3u8`, or its immediate directory is exactly `playlist` | +10 |
+| HLS filename contains a delimited `video` token or a 3–4 digit `p` quality-shaped token | -10 |
+| HLS filename contains a delimited `audio` token | -20 |
+| Unknown or conflicting HLS role naming | 0 |
+
+Naming checks ignore case. Token boundaries are filename start/end, hyphen,
+underscore, or dot; substrings such as `remastered` do not match `master`.
+Only one naming contribution applies. Master takes precedence over playlist
+when both appear. High-level plus rendition clues conflict and receive no naming
+adjustment; combined audio/video clues also receive no naming adjustment.
+Ancestor directories, hostnames, parameter names, unrelated query values, and
+request headers do not contribute to ranking. A quality-shaped token is only a
+rendition clue; M6 does not extract or validate resolution metadata.
+
+Structural examples (synthetic paths, not captured session data):
+
+| Candidate path | Expected score |
+| --- | ---: |
+| `/master.m3u8` | 90 |
+| `/playlist/opaque-id.m3u8` | 70 |
+| `/index.m3u8`, `/index-v1-a1.m3u8`, `/index-a1.m3u8` | 60 |
+| `/manifest.mpd` | 60 |
+| `/video/video_720p.m3u8`, `/video/video_1080p.m3u8` | 50 |
+| `/hls/audio_1.m3u8` | 40 |
+| `/movie.mp4`, `/v-0144p-0100k-libx264-s19.mp4`, `/track.mp3` | 30 |
+| `/playlist/video_1080p.m3u8`, `/audio_video.m3u8` | 60 (conflicting/ambiguous naming) |
+
+An encoded query-embedded `/master.m3u8` receives the same 90 score when it is
+the pathname selected by M4.1. An outer media pathname still takes precedence.
+For multiple embedded candidates, the existing first-match order remains in
+effect; unrelated later query values cannot boost the score.
+
+### Manual validation — Firefox first, Brave second
+
+1. Reload the extension, open its background console, and return focus to the
+   normal browser window containing the intended playback tab. Confirm target
+   updates and candidate logs without module-loading errors.
+2. Play existing HLS, DASH, video, and audio regression targets. Each previously
+   detected candidate should still appear, now with `Priority score`,
+   `Ranking path source`, and signed evidence contributions. Verify User-Agent,
+   Referer, Origin, and Range still reflect the same request; Cookie and
+   Authorization remain presence-only, with unavailable fields `not observed`.
+3. Compare parent `/playlist/<id>.m3u8` against `video_720p.m3u8`,
+   `video_1080p.m3u8`, and `audio_1.m3u8` when playback emits these shapes.
+   Expect 70, 50, 50, and 40 respectively. Compare `master.m3u8` (90) with
+   `index-v1-a1.m3u8` and `index-a1.m3u8` (both neutral-role 60).
+4. Repeat the wrapped/proxy HLS regression. Expect an HLS log with
+   `query-embedded pathname` as the ranking path source and the exact original
+   outer URL, including its encoding, query order, and signed values. Naming
+   evidence should come from the selected inner media path.
+5. Play the segmented-media regression. Individual `.mp4` candidates must
+   remain visible at 30; any detected HLS/DASH manifests should score higher.
+   Flood reduction and identification of individual segments are not implemented.
+6. Switch target tabs while traffic continues in the previous tab. Only the
+   current target's requests should produce candidate logs. In Brave, also
+   allow the worker to idle with DevTools closed, then switch tabs and resume
+   playback to check existing target reconstruction and module loading.
+
+### Limits and deferred work
+
+M6 does not fetch/parse manifests, prove parent-child links, group playback
+sessions, sort console history, deduplicate, suppress candidates, or persist
+scores. A complete direct file can be more useful than a manifest despite this
+initial manifest preference. Filename clues can be misleading; ties and unknown
+roles are intentional. No provider-specific rules or `v1-a1` penalty exist.
+
+Stronger role/relationship evidence, MIME detection, request correlation,
+segment behavior, subtitles, languages, titles, bitrate/resolution/codec
+metadata, UI, export, and downloader integration remain deferred. Later ranking
+work can add evidence contributions without putting scoring into the detector.
+
+The ranker uses plain JavaScript and no browser APIs or mutable session state.
+It is loaded before observer registration through the existing Firefox and
+Chromium bootstrap paths; permissions and manifest configuration are unchanged.
+Existing documented MV3 manifest warnings and browser header-exposure differences
+still apply. Actual Firefox/Brave M6 validation remains pending owner testing.
+
+Local validation passed: JavaScript syntax checks, 6,000 classification
+comparisons against the pre-M6 detector, synthetic ranking/ambiguity checks,
+unchanged M5 log-content checks (apart from added ranking lines), exact URL and
+sensitive-header redaction checks, target-tab isolation, and mocked Firefox and
+Chromium loading with both header-registration paths. These are tool/mock checks,
+not actual browser or website playback tests. No test framework was added.

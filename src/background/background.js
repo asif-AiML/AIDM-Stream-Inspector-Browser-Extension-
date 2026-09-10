@@ -102,12 +102,19 @@ initializeTargetTab();
 
 // Chromium loads only this service worker; Firefox loads both manifest scripts.
 if (typeof importScripts === "function") {
-  importScripts("../core/stream-types.js", "candidate-detector.js", "network-observer.js");
+  importScripts(
+    "../core/stream-types.js",
+    "candidate-detector.js",
+    "../core/candidate-ranker.js",
+    "network-observer.js"
+  );
   globalThis.startNetworkObserver();
 } else {
   loadBackgroundPageScript("src/core/stream-types.js", () => {
     loadBackgroundPageScript("src/background/candidate-detector.js", () => {
-      globalThis.startNetworkObserver();
+      loadBackgroundPageScript("src/core/candidate-ranker.js", () => {
+        globalThis.startNetworkObserver();
+      });
     });
   });
 }

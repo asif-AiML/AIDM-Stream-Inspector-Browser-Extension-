@@ -5,19 +5,25 @@ function detectTargetTabCandidate(details) {
     return;
   }
 
-  const candidateType = globalThis.detectObviousMediaCandidate(details.url);
+  const candidateEvidence = globalThis.detectObviousMediaCandidateEvidence(details.url);
 
-  if (candidateType === null) {
+  if (candidateEvidence === null) {
     return;
   }
 
+  const ranking = globalThis.rankMediaCandidate(candidateEvidence);
   const requestHeaders = Array.isArray(details.requestHeaders)
     ? details.requestHeaders
     : [];
 
   console.log(
-    `[AIDM Candidate][${candidateType}]\n`
+    `[AIDM Candidate][${candidateEvidence.type}]\n`
     + `URL: ${details.url}\n`
+    + `Priority score: ${ranking.score} (higher = likely more useful)\n`
+    + `Ranking path source: ${candidateEvidence.source}\n`
+    + `Ranking evidence:\n${ranking.evidence.map((item) =>
+      `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
+    ).join("\n")}\n`
     + `User-Agent: ${getHeaderValue(requestHeaders, "user-agent")}\n`
     + `Referer: ${getHeaderValue(requestHeaders, "referer")}\n`
     + `Origin: ${getHeaderValue(requestHeaders, "origin")}\n`

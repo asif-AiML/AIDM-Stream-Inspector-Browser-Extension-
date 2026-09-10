@@ -12,6 +12,11 @@ const obviousMediaExtensions = [
 ];
 
 function detectObviousMediaCandidate(requestUrl) {
+  const evidence = detectObviousMediaCandidateEvidence(requestUrl);
+  return evidence === null ? null : evidence.type;
+}
+
+function detectObviousMediaCandidateEvidence(requestUrl) {
   let parsedRequestUrl;
 
   try {
@@ -23,7 +28,11 @@ function detectObviousMediaCandidate(requestUrl) {
   const pathnameType = classifyObviousMediaPath(parsedRequestUrl.pathname);
 
   if (pathnameType !== null) {
-    return pathnameType;
+    return {
+      type: pathnameType,
+      pathname: parsedRequestUrl.pathname,
+      source: "request pathname"
+    };
   }
 
   const rawQuery = parsedRequestUrl.search.slice(1);
@@ -36,25 +45,24 @@ function detectObviousMediaCandidate(requestUrl) {
     }
 
     const rawValue = queryPart.slice(separatorIndex + 1);
-    const rawValueType = classifyObviousMediaEvidence(rawValue, parsedRequestUrl);
-
-    if (rawValueType !== null) {
-      return rawValueType;
-    }
+    const rawValueEvidence = classifyObviousMediaEvidence(rawValue, parsedRequestUrl);
 
     const decodedValue = safelyDecodeQueryValue(rawValue);
+    const decodedValueEvidence = decodedValue === null
+      ? null
+      : classifyObviousMediaEvidence(decodedValue, parsedRequestUrl);
 
-    if (decodedValue === null) {
-      continue;
+    if (rawValueEvidence !== null) {
+      // Encoded separators can leave a raw value ending in .m3u8. Expose the
+      // decoded path for naming evidence only when it confirms the same type.
+      return decodedValueEvidence !== null
+        && decodedValueEvidence.type === rawValueEvidence.type
+        ? decodedValueEvidence
+        : rawValueEvidence;
     }
 
-    const decodedValueType = classifyObviousMediaEvidence(
-      decodedValue,
-      parsedRequestUrl
-    );
-
-    if (decodedValueType !== null) {
-      return decodedValueType;
+    if (decodedValueEvidence !== null) {
+      return decodedValueEvidence;
     }
   }
 
@@ -63,7 +71,9 @@ function detectObviousMediaCandidate(requestUrl) {
 
 function classifyObviousMediaEvidence(value, baseUrl) {
   try {
-    return classifyObviousMediaPath(new URL(value, baseUrl).pathname);
+    const pathname = new URL(value, baseUrl).pathname;
+    const type = classifyObviousMediaPath(pathname);
+    return type === null ? null : { type, pathname, source: "query-embedded pathname" };
   } catch (error) {
     return null;
   }
@@ -92,3 +102,4 @@ function safelyDecodeQueryValue(rawValue) {
 }
 
 globalThis.detectObviousMediaCandidate = detectObviousMediaCandidate;
+globalThis.detectObviousMediaCandidateEvidence = detectObviousMediaCandidateEvidence;
