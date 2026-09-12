@@ -138,6 +138,231 @@ The extension should not silently erase thumbnail VTT traffic during development
 
 # Future M7.2 — Deep subtitle discovery
 
+## M7.2A — Passive response MIME evidence implemented
+
+M7.2A adds a diagnostic response observer in
+`src/background/subtitle-evidence-observer.js`. It listens to
+`webRequest.onResponseStarted` with `responseHeaders`, using the existing HTTP(S)
+host permissions and `webRequest` permission. This informational event exposes
+response headers/status without body access or traffic modification.
+
+The exact MIME allowlist is:
+
+| Normalized Content-Type | Evidence strength |
+| --- | --- |
+| `text/vtt` | Strong declaration of timed text; may still be thumbnails/metadata |
+| `application/x-subrip` | Strong declaration of subtitle data; contents unverified |
+| `application/ttml+xml` | Strong declaration of timed text; contents unverified |
+
+Header names and MIME matching ignore case; MIME parameters such as charset are
+ignored for matching. The original Content-Type is also printed. Missing,
+non-string, or multiple Content-Type fields do not qualify. Generic
+`application/xml`, `text/xml`, `application/octet-stream`, `application/json`,
+`text/plain`, and manifest MIME types do not trigger subtitle evidence. Path,
+request type, and frame clues alone do not trigger it either. No weak-evidence
+URL heuristic is implemented in this increment.
+
+Each MIME-only qualifying response produces `[AIDM Subtitle Evidence][MIME]` with the
+exact response URL, evidence code/reason, strength, Content-Type, status,
+request ID, tab ID, frame ID, parent frame ID, and browser request type. It
+explicitly states that a usable subtitle URL is not established. An HTTP error
+with a matching MIME can still produce evidence; the displayed status must be
+considered. MIME proves only what the server declared, not successful retrieval,
+cue contents, subtitle role, association, or external reproducibility.
+
+MIME classification remains independent of M7/M7.1 and does not construct
+candidates or invoke ranking. M7.2A.1 consolidates presentation: an obvious
+subtitle/timed-text request receives one log containing URL, role, and response
+evidence. A thumbnail VTT retains its M7.1 role even with `text/vtt`. An opaque
+URL with strong MIME still produces evidence when M7 detected nothing.
+
+### Request context and isolation
+
+`network-observer.js` shares its existing M5 formatting through
+`formatRequestContext()`. Target-tab sends retain this formatted subset, request
+URL/tab/frame/parent-frame/type identity, and any M7 subtitle evidence plus M7.1
+classification in an in-memory map keyed by request ID. Cookie/Authorization values and unrelated headers are never
+retained in that map; response Set-Cookie is not logged or retained.
+
+The response handler checks the current target tab independently. It matches
+request context by request ID, exact URL, tab ID, and frame ID. Request IDs can
+span redirects, so a previous hop's headers must not be attached to a later URL.
+Every observed response removes its entry even if MIME is irrelevant or the
+target changed. Redirect, completion, and error events remove pending entries
+and emit any still-pending obvious subtitle with the available metadata. Completed
+and redirect events request `responseHeaders` for this fallback. The map is capped
+at 512 pending entries; eviction emits pending obvious subtitle evidence with an
+explicit capacity-limit observation before releasing it.
+
+There is no persistent storage. Background restart, eviction, unobserved send
+events, or mismatched context can leave response evidence without request
+headers. The log then says request context is unavailable and prints M5 fields
+as `not observed`. At response start, URL evidence can be reconstructed with the
+unchanged media-first detector; MIME-only evidence also remains visible. Hanging
+requests wait for response, a terminal event, eviction, or background shutdown.
+There are no timers or persistent records.
+
+Frame 0 denotes the main frame; positive frame IDs identify subframes within
+the logged tab, with the browser-provided parent frame ID alongside them. These
+are request-frame facts, not a reconstructed playback/frame tree or page title.
+No DOM inspection or iframe traversal is added.
+
+### Browser/API boundaries investigated
+
+- Both Firefox and Chromium expose response headers/status through
+  [onResponseStarted](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/webRequest/onResponseStarted).
+  The implementation uses the existing shared bootstrap paths and no new permissions.
+- The shared webRequest events used here do not expose response bodies. HLS
+  `EXT-X-MEDIA`, DASH text AdaptationSets, and subtitle data inside JSON cannot be
+  inspected from these headers. A manifest MIME alone cannot establish that it
+  contains subtitles. These sources were investigated but not implemented.
+- Firefox has a separate
+  [filterResponseData API](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/webRequest/filterResponseData),
+  requiring additional permissions and responsibility for forwarding/closing the
+  response stream. It is outside this passive, shared implementation; no body
+  filter or workaround is used.
+- Chromium's
+  [webRequest API](https://developer.chrome.com/docs/extensions/reference/api/webRequest)
+  exposes only permitted requests, may omit some cache-served traffic, and has
+  no equivalent body field on this response event. Existing request-header
+  exposure/fallback differences remain applicable. No DevTools protocol is used.
+- The repository has no page/content-script bridge. DOM tracks, player state,
+  generated cues, and inline bootstrap configuration are currently unobserved,
+  not proven inaccessible to every possible extension architecture. A later
+  scoped content script would need separate frame/permission design; the
+  background page's DOM is not the playback page's DOM.
+- Generic/mislabelled MIME, previously loaded resources, and data only inside
+  bodies or player state remain unresolved by this increment. Absence of evidence
+  does not prove absence of subtitles or identify the hidden delivery mechanism.
+
+### Manual Firefox test
+
+1. Reload the extension in `about:debugging#/runtime/this-firefox` and open its
+   background console with **Inspect**. Then focus the intended playback tab.
+2. Reload the hidden-subtitle player from initialization with subtitles off.
+   Watch for `[AIDM Subtitle Evidence][MIME]` before toggling subtitles.
+3. Start playback, enable subtitles, and switch languages if available. Compare
+   evidence timing, URL, Content-Type/status, and tab/frame IDs with the page
+   Network panel. Frame IDs distinguish top-level and embedded-frame requests;
+   the evidence source in this implementation is always network MIME.
+4. When an extensionless response declares an allowlisted MIME, expect a new
+   evidence log even though it has no `.srt`/`.vtt` suffix. Check exact query
+   encoding/order and same-request User-Agent/Referer/Origin/Range. Cookie and
+   Authorization remain presence-only. If the tested server supplies no such
+   response, record the MIME discovery result as unresolved rather than failure
+   of existing M7 or proof of a specific hidden mechanism.
+5. Repeat with known direct SRT/VTT controls, including a thumbnail VTT. Existing
+   M7/M7.1 logs must remain, and media scores/reasons/priorities must be unchanged.
+   Matching response MIME must appear in the same entry for that request ID.
+6. Switch target tabs while traffic continues. Evidence must be logged only for
+   the current target; missing request context must never borrow another request's
+   headers. Compare page traffic with the extension enabled/disabled to check
+   that observation adds no extension-initiated fetches or replays.
+
+### Brave/Chromium sanity test
+
+Reload the unpacked extension in `brave://extensions` or `chrome://extensions`,
+inspect the service worker, and repeat the Firefox playback/control checks with
+the playback tab focused. Also close worker DevTools, allow it to idle, then
+switch tabs/reload playback and check that listeners recover. If the background
+restarts between send and response, MIME evidence may legitimately report missing
+request context. Existing documented MV3 manifest warnings remain applicable.
+
+### Validation and next evidence checkpoint
+
+Local syntax and in-memory validation passed: positive MIME/parameter/case
+handling; broad-MIME and ambiguous-header exclusions; concurrent same-URL
+request correlation; redirects/errors/completion cleanup; missing context;
+status/frame/tab isolation; the 512-entry bound; and both mocked browser startup
+and request-header fallback paths. All 272 existing M4–M7.1 log comparisons
+matched the pre-change output. Detector, ranker, role classifier, type definitions,
+and manifest were verified unchanged. No test framework was added.
+
+Actual Firefox/Brave and hidden-player playback were not tested by the coding
+agent. Subsequent owner testing validated M7.2A: an opaque API request declared
+`text/vtt; charset=utf-8`, status 200, type `xmlhttprequest`; manual curl reproduction
+of the exact captured URL returned real WebVTT. This establishes MIME discovery
+for that observed response, not every server/player or universal reproducibility.
+
+M7.2B should be selected from the resulting evidence: strong opaque-response
+MIME may support later candidate construction and role/reproduction validation;
+if MIME stays silent, a narrowly scoped DOM-track investigation may be more
+useful. Body-only mechanisms need a separately justified approach within the
+browser boundaries. No extraction, refetching, content scripts, body parsing,
+association, downloads, or AiDM handoff were implemented here.
+
+## M7.2A.1 — Same-request presentation consolidation
+
+The request observer still runs M7 detection immediately, but defers subtitle
+console output to `onResponseStarted`. Media ranking/output remains immediate
+and unchanged. The response observer combines the stored URL evidence and M7.1
+role with MIME evidence, raw Content-Type, status, exact URL, request/frame/tab
+identity, and the shared safe M5 context in one entry. Generic or conflicting
+Content-Type fields remain visible without becoming positive MIME evidence.
+
+No MIME value overrides the role classifier: `/subs/english.vtt` is likely
+subtitle, `thumbnails.vtt` is likely thumbnail/storyboard, and `english.vtt`
+alone remains unknown timed-text. All three stay visible. MIME-only opaque
+responses retain `[AIDM Subtitle Evidence][MIME]`, including the qualification
+that a usable subtitle URL is not yet established by the extension.
+
+Identity is browser request ID plus exact URL, tab ID, and frame ID validation.
+Different request IDs remain separate even for byte-identical URLs. Redirect
+hops are separate observations; old-hop headers never enrich the new hop.
+No general deduplication or candidate promotion is implemented.
+
+One-entry consolidation assumes the send/response lifecycle remains observable
+within the retained state. On capacity eviction, pending obvious evidence is
+printed rather than silently dropped. If its response arrives later, another
+entry can appear with unavailable request context. Background shutdown can lose
+pending evidence/context; response-start recovery cannot restore request headers,
+and a failure after restart cannot recover a lost pending candidate. This is
+an explicit bounded, non-persistent diagnostic limitation in both background
+models, particularly relevant to Chromium MV3 suspension. A target change before
+emission also prevents logging the former target's evidence, preserving current
+target-tab isolation. No persistence or broad duplicate-suppression system is added.
+
+### Manual consolidation checks — Firefox, then Brave/Chromium
+
+1. Reload the extension in `about:debugging#/runtime/this-firefox`, inspect the
+   background console, and focus the playback tab. Reload the player so requests
+   occur after observation starts. Keep the page Network panel available.
+2. **A — VTT:** trigger a known subtitle VTT. Expect one entry per request ID,
+   with URL evidence, unchanged role, MIME evidence and Content-Type/status.
+   There must be no second MIME-only entry for the same normal request lifecycle.
+   Use a `/subs/` VTT for a positive role; `english.vtt` alone stays unknown.
+3. **B — thumbnails:** trigger `thumbnails.vtt` with `text/vtt`. Expect one
+   `[AIDM Timed Text][VTT]`, still likely thumbnail/storyboard, with both evidence
+   sources. MIME must not promote the role.
+4. **C — hidden API:** reload the MIME-positive hidden-subtitle player from
+   initialization, enable subtitles and switch languages if available. Expect
+   `[AIDM Subtitle Evidence][MIME]` for an opaque URL with strong MIME, preserving
+   its exact URL, Content-Type/status, request context, and frame/tab IDs.
+5. **D — SRT:** trigger an obvious SRT request. Expect one subtitle entry even
+   with missing/generic MIME; `application/x-subrip`, when present, enriches it.
+   A failed request before response start should still produce a fallback entry.
+6. Compare request headers/URL with Network: User-Agent, Referer, Origin, Range
+   remain as exposed; Cookie and Authorization are presence-only. Reload/request
+   the same resource again: different request IDs should remain separate. Verify
+   ordinary media scores/evidence and wrapped URL detection, then switch target
+   tabs and confirm background-tab traffic does not appear.
+7. Repeat A–D and the context/isolation checks after reloading the unpacked
+   extension in `brave://extensions` or `chrome://extensions`. Close worker
+   DevTools, let it idle, resume/reload playback, and inspect again. Missing
+   request context after restart is a documented limitation, not borrowed data.
+
+Local validation used in-memory event mocks, with no test framework or artifacts:
+37 lifecycle/evidence cases and 40 exact pre/post media-log comparisons passed;
+all JavaScript parsed, and detector/ranker/role classifier/bootstrap/manifest
+were verified unchanged. Actual browser validation remains for the owner.
+
+M7.2B remains deferred: evaluate promotion of strong MIME observations into
+subtitle candidates with explicit format/role uncertainty and reproduction
+limits. Language, association, extraction, body parsing, downloads, UI, and AiDM
+handoff are not part of this cleanup.
+
+## Remaining deeper sources
+
 M7/M7.1 only cover resources that are already obvious enough to classify from browser-visible network evidence.
 
 Some websites show subtitles in the player but do not expose an obvious `.srt` or `.vtt` request to ordinary stream detectors.

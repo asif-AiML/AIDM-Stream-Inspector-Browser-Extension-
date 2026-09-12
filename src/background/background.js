@@ -107,6 +107,7 @@ if (typeof importScripts === "function") {
     "candidate-detector.js",
     "../core/candidate-ranker.js",
     "../core/subtitle-role-classifier.js",
+    "subtitle-evidence-observer.js",
     "network-observer.js"
   );
   globalThis.startNetworkObserver();
@@ -115,7 +116,9 @@ if (typeof importScripts === "function") {
     loadBackgroundPageScript("src/background/candidate-detector.js", () => {
       loadBackgroundPageScript("src/core/candidate-ranker.js", () => {
         loadBackgroundPageScript("src/core/subtitle-role-classifier.js", () => {
-          globalThis.startNetworkObserver();
+          loadBackgroundPageScript("src/background/subtitle-evidence-observer.js", () => {
+            globalThis.startNetworkObserver();
+          });
         });
       });
     });

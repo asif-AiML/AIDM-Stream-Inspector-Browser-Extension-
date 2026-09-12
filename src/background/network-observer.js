@@ -9,56 +9,42 @@ function detectTargetTabCandidate(details) {
   const candidateEvidence = globalThis.detectObviousMediaCandidateEvidence(details.url)
     || globalThis.detectObviousSubtitleCandidateEvidence(details.url);
 
+  globalThis.rememberSubtitleRequestContext(details, candidateEvidence);
+
   if (candidateEvidence === null) {
     return;
   }
 
-  const isSubtitle = candidateEvidence.type === globalThis.AIDM_STREAM_TYPES.SUBTITLE;
-  let candidateHeading;
-  let rankingOutput = "";
-  let roleOutput = "";
-
-  if (isSubtitle) {
-    const classification = globalThis.classifySubtitleRole(candidateEvidence);
-    const roles = globalThis.AIDM_SUBTITLE_ROLES;
-    const roleLabels = {
-      [roles.SUBTITLE]: "likely subtitle",
-      [roles.THUMBNAIL]: "likely thumbnail/storyboard",
-      [roles.UNKNOWN]: "unknown timed-text"
-    };
-    const category = classification.role === roles.SUBTITLE ? "Subtitle" : "Timed Text";
-    candidateHeading = `[AIDM ${category}][${candidateEvidence.format}]`;
-    roleOutput = `Role: ${roleLabels[classification.role]}\n`
-      + `Role path source: ${candidateEvidence.source}\n`
-      + `Role evidence:\n${classification.evidence.map((item) =>
-        `  [${item.code}] ${item.reason}`
-      ).join("\n")}\n`;
-  } else {
-    const ranking = globalThis.rankMediaCandidate(candidateEvidence);
-    candidateHeading = `[AIDM Candidate][${candidateEvidence.type}]`;
-    rankingOutput = `Priority: ${getPriorityLabel(ranking.score)} (${ranking.score})\n`
-      + `Ranking path source: ${candidateEvidence.source}\n`
-      + `Ranking evidence:\n${ranking.evidence.map((item) =>
-        `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
-      ).join("\n")}\n`;
+  if (candidateEvidence.type === globalThis.AIDM_STREAM_TYPES.SUBTITLE) {
+    // Emit once response metadata or a terminal event can enrich this request.
+    return;
   }
 
-  const requestHeaders = Array.isArray(details.requestHeaders)
-    ? details.requestHeaders
-    : [];
+  const ranking = globalThis.rankMediaCandidate(candidateEvidence);
+  const candidateHeading = `[AIDM Candidate][${candidateEvidence.type}]`;
+  const rankingOutput = `Priority: ${getPriorityLabel(ranking.score)} (${ranking.score})\n`
+    + `Ranking path source: ${candidateEvidence.source}\n`
+    + `Ranking evidence:\n${ranking.evidence.map((item) =>
+      `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
+    ).join("\n")}\n`;
 
   console.log(
     `${candidateHeading}\n`
-    + roleOutput
     + `URL: ${details.url}\n`
     + rankingOutput
-    + `User-Agent: ${getHeaderValue(requestHeaders, "user-agent")}\n`
+    + formatRequestContext(details.requestHeaders)
+  );
+}
+
+function formatRequestContext(observedHeaders) {
+  const requestHeaders = Array.isArray(observedHeaders) ? observedHeaders : [];
+
+  return `User-Agent: ${getHeaderValue(requestHeaders, "user-agent")}\n`
     + `Referer: ${getHeaderValue(requestHeaders, "referer")}\n`
     + `Origin: ${getHeaderValue(requestHeaders, "origin")}\n`
     + `Cookie: ${getHeaderPresence(requestHeaders, "cookie")}\n`
     + `Authorization: ${getHeaderPresence(requestHeaders, "authorization")}\n`
-    + `Range: ${getHeaderValue(requestHeaders, "range")}`
-  );
+    + `Range: ${getHeaderValue(requestHeaders, "range")}`;
 }
 
 function getPriorityLabel(score) {
@@ -113,6 +99,9 @@ function startNetworkObserver() {
       ["requestHeaders"]
     );
   }
+
+  globalThis.startSubtitleEvidenceObserver(requestFilter);
 }
 
+globalThis.formatRequestContext = formatRequestContext;
 globalThis.startNetworkObserver = startNetworkObserver;
