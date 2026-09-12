@@ -106,6 +106,7 @@ if (typeof importScripts === "function") {
     "../core/stream-types.js",
     "candidate-detector.js",
     "../core/candidate-ranker.js",
+    "../core/subtitle-role-classifier.js",
     "network-observer.js"
   );
   globalThis.startNetworkObserver();
@@ -113,7 +114,9 @@ if (typeof importScripts === "function") {
   loadBackgroundPageScript("src/core/stream-types.js", () => {
     loadBackgroundPageScript("src/background/candidate-detector.js", () => {
       loadBackgroundPageScript("src/core/candidate-ranker.js", () => {
-        globalThis.startNetworkObserver();
+        loadBackgroundPageScript("src/core/subtitle-role-classifier.js", () => {
+          globalThis.startNetworkObserver();
+        });
       });
     });
   });

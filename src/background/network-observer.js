@@ -16,9 +16,23 @@ function detectTargetTabCandidate(details) {
   const isSubtitle = candidateEvidence.type === globalThis.AIDM_STREAM_TYPES.SUBTITLE;
   let candidateHeading;
   let rankingOutput = "";
+  let roleOutput = "";
 
   if (isSubtitle) {
-    candidateHeading = `[AIDM Subtitle][${candidateEvidence.format}]`;
+    const classification = globalThis.classifySubtitleRole(candidateEvidence);
+    const roles = globalThis.AIDM_SUBTITLE_ROLES;
+    const roleLabels = {
+      [roles.SUBTITLE]: "likely subtitle",
+      [roles.THUMBNAIL]: "likely thumbnail/storyboard",
+      [roles.UNKNOWN]: "unknown timed-text"
+    };
+    const category = classification.role === roles.SUBTITLE ? "Subtitle" : "Timed Text";
+    candidateHeading = `[AIDM ${category}][${candidateEvidence.format}]`;
+    roleOutput = `Role: ${roleLabels[classification.role]}\n`
+      + `Role path source: ${candidateEvidence.source}\n`
+      + `Role evidence:\n${classification.evidence.map((item) =>
+        `  [${item.code}] ${item.reason}`
+      ).join("\n")}\n`;
   } else {
     const ranking = globalThis.rankMediaCandidate(candidateEvidence);
     candidateHeading = `[AIDM Candidate][${candidateEvidence.type}]`;
@@ -35,6 +49,7 @@ function detectTargetTabCandidate(details) {
 
   console.log(
     `${candidateHeading}\n`
+    + roleOutput
     + `URL: ${details.url}\n`
     + rankingOutput
     + `User-Agent: ${getHeaderValue(requestHeaders, "user-agent")}\n`

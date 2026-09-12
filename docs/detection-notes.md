@@ -491,3 +491,90 @@ and subtitle-to-media association remain deferred to M7.1. Manifest/MIME,
 extensionless, DOM/player, and API/JSON discovery remain deferred to M7.2.
 Subtitle ranking, downloads, muxing, deduplication, UI, and AiDM integration
 remain outside this implementation.
+
+---
+
+## M7.1 — Subtitle role classification and basic metadata
+
+Owner testing after M7 confirmed obvious SRT detection and exposed two uses of
+VTT: thumbnail preview data and subtitle cues. The owner manually checked the
+bodies of `/thumbnails.vtt` and `/cache/subs/.../<id>.vtt`. The extension does
+not repeat those fetches or inspect bodies.
+
+This implementation narrows the earlier roadmap's M7.1 scope to role evidence.
+Language metadata and subtitle-to-media association remain deferred.
+
+`src/core/subtitle-role-classifier.js` is a pure helper returning `{ role,
+evidence }`. `AIDM_SUBTITLE_ROLES` defines `SUBTITLE`, `THUMBNAIL`, and `UNKNOWN`;
+these are inferred roles, separate from the unchanged M7 detection type/format.
+Evidence items contain a code and reason, with no scoring system.
+
+Rules, in order:
+
+1. SRT, ASS, and SSA imply **likely subtitle** from their subtitle-specific
+   format extensions; contents are still unverified.
+2. For VTT only, filename tokens `thumbnail`, `thumbnails`, `thumbs`, `storyboard`,
+   `storyboards`, `sprite`, or `sprites` imply **likely thumbnail/storyboard**.
+   This specific filename evidence takes precedence over subtitle-positive clues,
+   including `/subs/thumbnails.vtt` or `captions-thumbnails.vtt`.
+3. Otherwise, a VTT directory component exactly `subs`, `subtitles`, or `captions`
+   implies **likely subtitle**.
+4. Otherwise, VTT filename tokens `subtitle`, `subtitles`, `caption`, or `captions`
+   imply **likely subtitle**.
+5. Other cases remain **unknown timed-text**. For example, `english.vtt` alone
+   provides neither a supported role clue nor authoritative language metadata.
+
+Matching ignores case. Filename token boundaries are start/end, hyphen,
+underscore, or dot; `mythumbnails.vtt`, `spritesheet.vtt`, and `captioned.vtt`
+do not match. Preview directory names alone do not establish a thumbnail role.
+Only the pathname selected by M7 is inspected, including M4.1 embedded evidence.
+No additional decoding, hostname checks, query hints, or body inspection occurs.
+
+Likely subtitles retain `[AIDM Subtitle][FORMAT]`. Thumbnail and unknown roles
+use `[AIDM Timed Text][VTT]`. All include `Role`, `Role path source`, and
+`Role evidence`; all remain visible. The original outer URL and shared M5
+context block remain unchanged, including presence-only Cookie/Authorization.
+No language is inferred or displayed, and no candidate is suppressed.
+
+The detector, M6 ranker/weights, M6.1 priorities, type definitions, and manifest
+are unchanged. The new helper loads before observer registration through both
+existing background paths. No network requests, permissions, dependencies, or
+storage were added. This is heuristic interpretation, not proof of file contents.
+
+### Manual Firefox test
+
+1. Reload the extension in `about:debugging#/runtime/this-firefox`, open its
+   background console with **Inspect**, and focus the intended playback tab.
+2. On the existing SRT/thumbnail test player, reload playback and enable subtitles.
+   Expect SRT as `[AIDM Subtitle][SRT]` with `Role: likely subtitle`.
+   Expect `thumbnails.vtt` to remain logged as `[AIDM Timed Text][VTT]` with
+   `Role: likely thumbnail/storyboard`.
+3. On the VTT test player, compare `/thumbnails.vtt` against a VTT under `/subs/`.
+   Expect likely thumbnail/storyboard versus likely subtitle respectively.
+   An opaque VTT without these clues should stay visible as unknown timed-text.
+4. Compare exact URLs and exposed headers with the page Network panel, including
+   a wrapped request when available. Verify the outer URL stays intact and
+   Cookie/Authorization remain presence-only. Check that HLS/video/audio scores,
+   priority labels, and ranking reasons still appear as before.
+5. Switch target tabs while requests continue; only the current target should log.
+
+### Brave/Chromium sanity test
+
+Reload the unpacked extension in `brave://extensions` or `chrome://extensions`,
+inspect the service worker, and repeat steps 2–5 with the playback tab focused.
+Also close worker DevTools, allow it to idle, then switch tabs/resume playback
+and check that role/media logging resumes. Existing manifest warnings and header
+exposure differences remain applicable; M7.1 adds no browser-specific API use.
+
+### Validation and deferred work
+
+JavaScript syntax checks passed. In-memory checks passed for 70 direct/embedded
+role/context cases, four evidence-selection cases, 130 exact pre/post media-log
+comparisons, target isolation, timed-text exclusion from media ranking, and both
+mocked startup/header-fallback paths. Detector, ranker, type definitions, and
+manifest were verified unchanged. No test framework was added. Actual M7.1
+Firefox/Brave playback validation remains pending owner testing.
+
+M7.2 deep discovery, manifest/MIME/DOM/API analysis, VTT body parsing, language
+inference, association, default/forced flags, downloads/muxing, UI, deduplication,
+and AiDM integration were not implemented.
