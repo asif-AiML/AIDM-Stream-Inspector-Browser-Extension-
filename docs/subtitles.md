@@ -365,7 +365,7 @@ Conceptually:
 
 ```text
 video    → copy
- audio    → copy
+audio    → copy
 subtitle → copy or lightweight subtitle-format conversion if the container requires it
 ```
 
@@ -447,6 +447,89 @@ The exact UI/CLI wording remains future work.
 
 ---
 
+# Subtitle download engine and format authority
+
+Some subtitle resources do not have a useful filename or suffix even though the browser receives a valid subtitle representation.
+
+A real tested pattern is an API request whose query contains an upstream `.gz` source while the HTTP response itself declares:
+
+```text
+Content-Type: text/vtt
+```
+
+Manual reproduction confirmed that the outer API response contains real WebVTT subtitle content. A generic downloader may nevertheless infer an unusable name such as `unknown_video` because the request URL does not end in `.vtt`.
+
+The following future decision is therefore locked:
+
+> **For subtitle handoff, the delivered representation is authoritative; the URL filename is only one source of evidence.**
+
+When strong response metadata identifies the delivered subtitle format, AiDM should use that format for the output filename even if the URL is extensionless, contains an unrelated inner filename, or causes another downloader to guess an unknown extension.
+
+Examples:
+
+```text
+text/vtt
+    → .vtt
+
+application/x-subrip or another confirmed SubRip representation
+    → .srt
+```
+
+The MIME-to-extension table should remain conservative and evidence-driven rather than speculative.
+
+If URL evidence and response evidence disagree, both should be preserved in the handoff, but the format of the browser-delivered representation should normally determine the final subtitle suffix.
+
+Example conceptual handoff:
+
+```json
+{
+  "url": "https://api.example/subtitles/vtt?url=<encoded-upstream-resource>",
+  "kind": "subtitle",
+  "format": "vtt",
+  "mime": "text/vtt",
+  "discovery": "response-mime",
+  "headers": {
+    "referer": "https://example/",
+    "origin": "https://example"
+  }
+}
+```
+
+For direct subtitle resources of this kind, the preferred AiDM download engine is **aria2c**, not yt-dlp.
+
+The responsibility split is:
+
+```text
+AIDM Stream Inspector
+    → discover exact subtitle URL
+    → identify delivered format/MIME
+    → preserve required browser request context
+
+AiDM
+    → choose safe final filename/extension
+    → invoke aria2c for the direct HTTP resource
+
+aria2c
+    → fetch the response bytes exactly as delivered
+```
+
+Conceptually, AiDM may invoke aria2c with the required browser-observed context and an explicit output filename:
+
+```text
+aria2c
+  + exact subtitle URL
+  + Referer / Origin / User-Agent / other required context
+  + explicit --out="Movie.en.vtt"
+```
+
+AiDM must not depend on yt-dlp filename inference for these subtitle endpoints.
+
+An upstream `.gz` reference embedded inside the outer API URL does not mean AiDM should save a `.gz` file if the browser-facing endpoint already transforms/decompresses that source and returns `text/vtt`.
+
+This decision applies to future direct subtitle handoff only. HLS/DASH media handling remains in its existing media-specific path.
+
+---
+
 # Future structured handoff
 
 The extension should eventually hand AiDM a playback-level structured object rather than shell commands.
@@ -468,6 +551,7 @@ Conceptually:
     {
       "url": "https://...",
       "format": "srt",
+      "mime": "application/x-subrip",
       "language": "en",
       "label": "English",
       "role": "subtitle",
@@ -485,6 +569,8 @@ Important principles are:
 - one canonical playback title;
 - one or more media/audio candidates;
 - one or more subtitle candidates;
+- subtitle format represented independently from URL filename;
+- response MIME preserved when available;
 - language/role metadata where proven;
 - exact URLs preserved;
 - relevant browser request/session context preserved;
@@ -501,6 +587,7 @@ Responsible for:
 - subtitle discovery;
 - subtitle role classification;
 - subtitle metadata where observable;
+- delivered subtitle format/MIME evidence where observable;
 - subtitle/media/page association;
 - canonical playback title discovery;
 - preservation of exact request URLs/context;
@@ -519,7 +606,10 @@ Not responsible for:
 Responsible for:
 
 - downloading media and selected subtitles;
+- selecting the appropriate downloader for each handed-off resource;
+- using aria2c for direct HTTP subtitle resources where appropriate;
 - sanitizing the canonical title into safe filenames;
+- assigning subtitle extensions from the strongest confirmed representation evidence rather than blindly trusting URL suffixes;
 - assigning matching media/subtitle basenames;
 - sidecar subtitle output;
 - optional stream-copy muxing;
@@ -544,7 +634,7 @@ deep subtitle discovery
 (manifest / API / DOM / opaque endpoint evidence)
         ↓
 subtitle metadata
-(language / label / default / forced)
+(format / MIME / language / label / default / forced)
         ↓
 playback association
 (media + audio + subtitle grouping)
@@ -553,7 +643,9 @@ canonical title discovery
         ↓
 structured extension → AiDM handoff
         ↓
-AiDM download
+AiDM chooses resource-specific engine
+        ↓
+direct subtitle HTTP resource → aria2c
         ↓
 sidecar subtitles by default
 or optional stream-copy muxing
