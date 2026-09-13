@@ -1,6 +1,10 @@
 let currentPlaybackTitle = null;
+let currentTitleEvidence = null;
+let hasPlaybackMedia = false;
 let titleRequestVersion = 0;
 let lastTitleLog = "";
+let titleMetadataUnavailable = false;
+let unavailableNoticeLogged = false;
 
 function selectPlaybackTitle(observedEvidence) {
   const sources = {
@@ -41,37 +45,77 @@ function refreshPlaybackTitle() {
     const error = chrome.runtime.lastError;
     if (version !== titleRequestVersion || tabId !== globalThis.getCurrentTargetTabId()) return;
     if (error || !snapshot || typeof snapshot.pageUrl !== "string") {
+      currentTitleEvidence = null;
       currentPlaybackTitle = null;
-      if (lastTitleLog !== "unavailable") {
-        lastTitleLog = "unavailable";
-        console.log(`[AIDM Playback Title] Page metadata unavailable for tab ${tabId}; reload eligible pages after extension reload.`);
-      }
+      titleMetadataUnavailable = true;
+      promotePlaybackTitle();
       return;
     }
     chrome.tabs.get(tabId, (tab) => {
       if (chrome.runtime.lastError || version !== titleRequestVersion
           || tabId !== globalThis.getCurrentTargetTabId() || tab.url !== snapshot.pageUrl) return;
+      // A page notification can reveal an SPA URL change before tabs.onUpdated.
+      if (currentTitleEvidence && currentTitleEvidence.pageUrl !== snapshot.pageUrl) {
+        clearPlaybackTitle();
+      }
       const selection = selectPlaybackTitle(snapshot.evidence);
-      currentPlaybackTitle = { ...selection, tabId, frameId: 0, pageUrl: snapshot.pageUrl };
-      const logKey = JSON.stringify([tabId, selection.title]);
-      if (logKey === lastTitleLog) return;
-      lastTitleLog = logKey;
-      console.log(
-        "[AIDM Playback Title]\n"
-        + `Title: ${selection.title ?? "not established"}\n`
-        + `Source: ${selection.source ?? "none"}\nStrength: ${selection.strength}\n`
-        + `Tab ID: ${tabId}\nFrame: top-level (0)\nEvidence:\n`
-        + selection.evidence.map((item) =>
-          `  ${item.source}: ${item.value} [${item.strength}${item.eligible ? "" : "; not selected"}]`
-        ).join("\n")
-      );
+      currentTitleEvidence = { ...selection, tabId, frameId: 0, pageUrl: snapshot.pageUrl };
+      titleMetadataUnavailable = false;
+      promotePlaybackTitle();
     });
   });
 }
 
-function resetPlaybackTitle() {
+function promotePlaybackTitle() {
+  if (!hasPlaybackMedia) return;
+  const tabId = globalThis.getCurrentTargetTabId();
+  if (titleMetadataUnavailable && !unavailableNoticeLogged) {
+    unavailableNoticeLogged = true;
+    console.log(`[AIDM Playback Title] Page metadata unavailable for tab ${tabId}; reload eligible pages after extension reload.`);
+  }
+  const selection = currentTitleEvidence;
+  if (!selection || selection.tabId !== tabId) return;
+  currentPlaybackTitle = selection.title ? selection : null;
+  if (!currentPlaybackTitle) return;
+  // Alternate evidence and provenance still refresh internally. The same
+  // human-readable title does not need another full block just for rediscovery.
+  const logKey = JSON.stringify([tabId, selection.title]);
+  if (logKey === lastTitleLog) return;
+  lastTitleLog = logKey;
+  console.log(
+    "[AIDM Playback Title]\n"
+    + `Title: ${selection.title}\n`
+    + `Source: ${selection.source}\nStrength: ${selection.strength}\n`
+    + `Tab ID: ${tabId}\nFrame: top-level (0)\nEvidence:\n`
+    + selection.evidence.map((item) =>
+      `  ${item.source}: ${item.value} [${item.strength}${item.eligible ? "" : "; not selected"}]`
+    ).join("\n")
+  );
+}
+
+function observePlaybackMedia(tabId, candidateEvidence) {
+  const types = globalThis.AIDM_STREAM_TYPES;
+  if (tabId !== globalThis.getCurrentTargetTabId()
+      || ![types.HLS, types.DASH, types.DIRECT_VIDEO].includes(candidateEvidence.type)
+      || hasPlaybackMedia) return;
+  hasPlaybackMedia = true;
+  promotePlaybackTitle();
+  // Re-read once at gate opening, even if metadata hasn't sent a new mutation.
+  refreshPlaybackTitle();
+}
+
+function clearPlaybackTitle() {
+  ++titleRequestVersion;
+  hasPlaybackMedia = false;
+  currentTitleEvidence = null;
   currentPlaybackTitle = null;
   lastTitleLog = "";
+  titleMetadataUnavailable = false;
+  unavailableNoticeLogged = false;
+}
+
+function resetPlaybackTitle() {
+  clearPlaybackTitle();
   refreshPlaybackTitle();
 }
 
@@ -84,11 +128,11 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (tabId !== globalThis.getCurrentTargetTabId()) return;
   if (change.status === "loading" || change.url) {
-    ++titleRequestVersion;
-    currentPlaybackTitle = null;
+    clearPlaybackTitle();
     if (change.status === "loading") return;
   }
   if (change.status === "complete" || change.url || change.title) refreshPlaybackTitle();
 });
 globalThis.resetPlaybackTitle = resetPlaybackTitle;
+globalThis.observePlaybackMedia = observePlaybackMedia;
 refreshPlaybackTitle();

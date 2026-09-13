@@ -34,6 +34,7 @@ function detectTargetTabCandidate(details) {
     + rankingOutput
     + formatRequestContext(details.requestHeaders)
   );
+  globalThis.observePlaybackMedia(details.tabId, candidateEvidence);
 }
 
 function extractRequestContext(observedHeaders) {
