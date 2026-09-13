@@ -12,6 +12,9 @@ The subtitle work has reached:
 
 - **M7 — Obvious subtitle candidate detection: PASS**
 - **M7.1 — Subtitle role classification + basic metadata: PASS**
+- **M7.2A — MIME discovery: validated by owner testing**
+- **M7.2B — MIME candidate promotion: validated by owner testing**
+- **M7.2B.1 — Exact-resource deduplication: implemented; browser validation pending**
 
 Current tested behavior includes direct subtitle/timed-text detection for obvious resources such as SRT and VTT.
 
@@ -162,7 +165,8 @@ non-string, or multiple Content-Type fields do not qualify. Generic
 request type, and frame clues alone do not trigger it either. No weak-evidence
 URL heuristic is implemented in this increment.
 
-Each MIME-only qualifying response produces `[AIDM Subtitle Evidence][MIME]` with the
+Before M7.2B promotion, each MIME-only qualifying response produces
+`[AIDM Subtitle Evidence][MIME]` with the
 exact response URL, evidence code/reason, strength, Content-Type, status,
 request ID, tab ID, frame ID, parent frame ID, and browser request type. It
 explicitly states that a usable subtitle URL is not established. An HTTP error
@@ -356,10 +360,244 @@ Local validation used in-memory event mocks, with no test framework or artifacts
 all JavaScript parsed, and detector/ranker/role classifier/bootstrap/manifest
 were verified unchanged. Actual browser validation remains for the owner.
 
-M7.2B remains deferred: evaluate promotion of strong MIME observations into
-subtitle candidates with explicit format/role uncertainty and reproduction
-limits. Language, association, extraction, body parsing, downloads, UI, and AiDM
-handoff are not part of this cleanup.
+M7.2A.1 deferred promotion to M7.2B, implemented below. Language, association,
+extraction, body parsing, downloads, UI, and AiDM handoff remain outside both
+milestones.
+
+## M7.2B — Promote successful MIME-discovered candidates
+
+The existing observer now builds the same enriched subtitle candidate object for
+M7 URL evidence and MIME-only discovery. It does not introduce another detector,
+ranker, candidate store, export schema, or response-body reader.
+
+### Promotion gate and timing
+
+MIME-only promotion requires all of:
+
+- one unambiguous Content-Type in the existing strong allowlist;
+- `webRequest.onCompleted` observed with HTTP status 200–299;
+- the matching retained send record, validated by request ID, exact URL, tab ID,
+  and frame ID;
+- the request still belongs to the current target tab.
+
+`onResponseStarted` only establishes first-byte receipt, not completed transfer.
+For a potential MIME-only promotion, the observer retains Content-Type/status
+and the safe request context in the existing 512-entry map until completion.
+A subsequent network error produces diagnostic MIME evidence, not promotion.
+Non-2xx responses, redirects, and responses without matching context likewise
+remain diagnostics. No external reproducibility test runs in the extension.
+The existing completion listener also handles a retained request whose response
+start was not observed, using the completion event's response metadata.
+
+Obvious M7 subtitles keep their existing response-start/fallback log timing and
+request-level consolidation. They remain URL-based candidates even on failure;
+that is existing detection, not a claim of successful retrieval or new MIME
+promotion. Generic MIME cannot suppress them. Different request IDs remain
+separate, and media ranking/log timing is unchanged.
+
+### Representation and role
+
+The exact mappings, derived from the existing MIME allowlist, are:
+
+| MIME (case-insensitive, parameters ignored) | Candidate format |
+| --- | --- |
+| `text/vtt` | `VTT` |
+| `application/x-subrip` | `SRT` |
+| `application/ttml+xml` | `TTML` |
+
+Uppercase format values follow the existing `AIDM_SUBTITLE_FORMATS` convention.
+TTML is a new format constant for an already-supported MIME; `.ttml` URL detection
+was not added. Broad XML, octet-stream, JSON, and plain-text MIME do not promote.
+
+Strong MIME determines the delivered format even if a URL/embedded suffix says
+something else. Original URL evidence remains in the candidate evidence list;
+for example, a URL-detected SRT served as `text/vtt` has format `VTT` and retains
+its SRT URL evidence. An API URL containing an encoded `.gz` upstream path stays
+byte-for-byte the candidate URL; it is never replaced by the upstream resource.
+
+Existing M7.1 role evidence is preserved for obvious candidates, including
+thumbnail/storyboard roles. MIME-only candidates reuse the same classifier on
+the outer request pathname. VTT filename matching strips `.vtt` only if present,
+so extensionless names can use the existing preview/subtitle tokens and directory
+clues. No query/upstream path supplies a MIME-only semantic role. VTT without
+supported clues remains `UNKNOWN`; SRT MIME gives likely subtitle from its format;
+TTML currently remains `UNKNOWN`. MIME alone never establishes a VTT subtitle role.
+Unknown and thumbnail candidates use `[AIDM Timed Text][FORMAT]`, while likely
+subtitles use `[AIDM Subtitle][FORMAT]`. Promoted entries show
+`Discovery: response MIME` and do not use the MIME-only diagnostic heading.
+
+### Shared transient candidate shape
+
+`buildSubtitleCandidate()` in `subtitle-evidence-observer.js` enriches both
+sources into this development model:
+
+- `type: SUBTITLE`, `format`, detector `pathname` and `source`;
+- exact `url`, `mime`, `discovery: url | mime-response`;
+- `role`, `roleEvidence`, and `evidence` containing URL and/or MIME provenance;
+- `requestContext` with User-Agent, Referer, Origin, Range, and Cookie/Authorization
+  presence only (or null when unavailable for an obvious candidate);
+- `requestId`, `tabId`, `frameId`, `parentFrameId`, and `requestType`;
+- `response: { status, contentTypes, completed }` with original Content-Type
+  values retained, including ambiguous declarations on obvious candidates.
+
+The candidate is built for the existing console consumer and is not persisted.
+This is not a final handoff contract. `network-observer.js` extracts the same safe
+M5 fields once into an object; both media formatting and subtitle context reuse
+that extraction. Missing individual headers remain `not observed`; no header is
+assumed universally required for reproduction. A matched observed send is the
+minimum context gate, not proof that another client can reproduce the resource.
+Cookie/Authorization values and response Set-Cookie are never retained or logged.
+
+### State and browser limits
+
+Completion, errors, and redirects release pending state. Capacity eviction emits
+retained subtitle/MIME evidence before releasing it, without promotion when
+completion has not been observed. A background restart or eviction can prevent
+promotion because request context is lost; missing-context responses remain
+diagnostic where observed. Existing late-response duplicate limitations from
+M7.2A.1 remain. A hanging MIME-only request can wait until completion, failure,
+eviction, or shutdown. No timers, persistence, permissions, or active requests
+were added. Both Firefox's background path and Chromium's worker use the same
+implementation; lifecycle and header-exposure differences still apply.
+
+### Manual Firefox test, then Brave/Chromium
+
+1. Reload the extension through `about:debugging#/runtime/this-firefox`, inspect
+   its background console, then focus and reload the playback page. Open the
+   page Network panel for comparison. Observe from player initialization.
+2. **A — hidden MIME-only:** use the previously validated API subtitle playback,
+   enable subtitles, and wait for the request to complete. Expect one candidate
+   with format `VTT`, `Discovery: response MIME`, MIME/status, the exact outer API
+   URL, and matched M5 context. Its role may be unknown or likely subtitle based
+   on the supported outer-path clues. An embedded `.gz` must not affect format.
+3. **B — obvious VTT:** trigger a known VTT. Expect one consolidated candidate
+   with URL, MIME, and unchanged role evidence, not a second MIME candidate.
+4. **C — thumbnails:** trigger `thumbnails.vtt`; expect likely thumbnail/storyboard
+   under Timed Text, even with `text/vtt`.
+5. **D — failure:** inspect a MIME-only response with a non-2xx status, or a
+   request that fails after response start. Expect diagnostic MIME evidence only,
+   no promoted candidate. Use the existing playback/network controls; do not
+   store signed URLs or credentials in test files. If no such response is
+   available, record this live test as not exercised.
+6. Verify SRT and wrapped URL controls, media priorities/evidence, exact query
+   encoding, exposed headers and presence-only credentials. Switch target tabs
+   and confirm background-tab evidence cannot attach to the new target.
+7. Reload the unpacked extension in `brave://extensions`/`chrome://extensions`
+   and repeat A–D with the playback tab focused. Also close worker inspection,
+   allow idle/restart, resume playback, and inspect again; missing-context
+   diagnostics after restart are expected. Confirm there are no new permissions
+   and no extension-generated replay/fetch traffic.
+
+Local in-memory validation passed 57 evidence/lifecycle/model cases and 40 exact
+pre/post media-log comparisons. JavaScript syntax passed; the detector, ranker,
+bootstrap, and manifest were verified unchanged. Tests covered all mappings,
+late errors, status boundaries, consolidation, role preservation, signed outer
+URLs, safe context, identity mismatches, target changes, redirects, capacity,
+and both request-header registration paths. No test infrastructure was added.
+Actual Firefox/Brave playback testing remains for the owner; the prior manual
+curl result is owner-provided evidence, not a runtime verification by the extension.
+
+Language/labels, metadata, playback association, final selection, candidate
+persistence, subtitle naming, structured handoff, and AiDM engine integration
+remain later work. No next milestone is started here.
+
+## M7.2B.1 — Subtitle-only exact-resource deduplication
+
+After candidate construction and target filtering, `rememberSubtitleCandidate()`
+in `subtitle-evidence-observer.js` groups subtitle/timed-text observations. MIME
+promotion requirements, obvious URL detection, and request-level consolidation
+remain unchanged. Diagnostic MIME evidence that was not promoted bypasses this
+store and remains visible as before. Media candidates never enter this store.
+
+The key is `JSON.stringify([tabId, exactFullUrl, format])`. Tuple serialization
+only makes a collision-safe map key; it does not parse, normalize, decode, or
+rewrite the URL. Tokens, parameter order, encoding, and fragments remain part of
+identity. Different formats do not merge. Frame/context differences do not split
+a resource; each retained observation carries its own values.
+
+There is no playback-session model. The dedupe window is the current target-tab
+selection: the existing `setCurrentTargetTabId()` clears candidate state whenever
+its value changes, including becoming unavailable. Returning to a previous tab
+starts fresh. Focus transitions can also reset the window. Same-tab navigation
+alone does not reset it. This deliberately does not infer playback groups or add
+navigation APIs. The pending request-context lifecycle is unchanged.
+
+Each logical resource contains a local diagnostic ID, exact URL, tab, format,
+merged role/evidence, discovery sources, total `observationCount`, first/latest
+status, and an `observations` array of enriched M7.2B candidates. Request IDs,
+frame/parent-frame IDs, request type, safe M5 context, response Content-Type/status,
+URL/MIME evidence, and role evidence stay attached to their observations. No
+Cookie/Authorization values are introduced. Request IDs can be inspected via
+`resource.observations.map(item => item.requestId)`.
+
+Evidence summaries union distinct items rather than replacing earlier evidence.
+MIME summary entries omit raw Content-Type spelling/parameters so repeated charset
+or case variants cannot grow the summary indefinitely; raw values remain in the
+bounded observations. With the current fixed detector/classifier, summary items
+are limited to the finite URL, normalized MIME, and role clues for one exact
+URL/format. Future evidence producers must preserve that bound or add an explicit
+summary cap. Discoveries are the existing finite `url`/`mime-response` values.
+
+Unknown roles cannot erase a supported role. Thumbnail/storyboard evidence keeps
+M7.1 preview precedence over subtitle clues; all contributing role reasons remain
+in the summary. Repetition itself supplies no role evidence.
+
+### Console and memory bounds
+
+The first observation logs the existing full block plus `Candidate ID` and
+`Observations: 1`. Repeats print one compact line referencing that candidate ID,
+with total observations, incoming request ID/status, aggregate role, retained
+history size, and omitted-history count. There is no console-line mutation.
+The existing candidate builder's individual observations are not overwritten.
+For development, `subtitleCandidates` in the background console holds the map;
+`Array.from(subtitleCandidates.values())` exposes its current records.
+
+- At most **128 logical resources**, evicting the oldest inserted resource with
+  an explicit console notice. A later observation of an evicted resource starts
+  a new full entry and count.
+- At most **64 detailed observations per resource**: the first and the latest
+  63. Older middle observations are released, while total count, first/latest
+  status, and merged evidence/role summaries remain. Compact logs report
+  `Omitted older observations`; a complete request-ID/context history beyond the
+  cap is not retained. This is bounded diagnostic retention, not an audit archive.
+- A target change, extension reload, or background restart clears dedupe state.
+  Chromium MV3 suspension/restart can therefore produce a fresh full entry for
+  a previously seen URL. Firefox background lifetime must not be assumed either.
+  No persistent storage, new permissions, or browser-specific APIs were added.
+
+### Manual Firefox tests, then Brave/Chromium
+
+1. Reload the extension in `about:debugging#/runtime/this-firefox`, open its
+   background console, then focus and reload the playback tab. Avoid changing
+   target selection between the two requests being compared.
+2. **A — MIME-only:** use the validated player that requests the same exact API
+   subtitle twice. Wait for both requests to complete. Expect one full candidate
+   and a compact merge line with `Observations: 2`, the same candidate ID, and the
+   second request ID. Inspect the map to confirm both request IDs and exact URL.
+3. **B — obvious VTT:** repeat with a direct VTT. Expect one resource retaining
+   URL/MIME evidence and two observations, without another full block.
+4. **C — thumbnail VTT:** repeat with `thumbnails.vtt`. Expect one Timed Text
+   resource, still likely thumbnail/storyboard, with count 2.
+5. **D — signed URLs:** where playback provides two different tokenized URLs,
+   expect two full candidates. Compare the full strings in Network, not only
+   their displayed filenames. Do not save live tokens in repository test files.
+6. **E — tabs:** trigger the same URL in tab A, then select tab B and trigger it
+   there. Expect a fresh full candidate for B with count 1; no headers or frames
+   from A should be attached. Returning to A also starts a new dedupe window.
+7. Confirm repeated MP4/HLS/audio logs and ranking remain unchanged, SRT detection
+   still works, and failed MIME-only requests stay diagnostic. Inspect Network
+   for absence of extension-generated fetch/replay requests.
+8. Repeat A–E after reloading in `brave://extensions`/`chrome://extensions`.
+   Close worker DevTools, allow idle/restart, resume playback, and inspect again;
+   a fresh count after restart is expected. There are no new permissions.
+
+Local in-memory validation passed 25 dedupe/lifecycle cases and seven repeated
+media-log comparisons. Both mocked Firefox and Chromium bootstrap paths passed
+same-target retention and changed/unavailable-target reset checks. Syntax and
+unchanged detector, ranker, classifier, context extraction, and manifest were
+checked. Actual Firefox/Brave playback tests were not performed by the coding
+agent. Metadata, language, association, playback grouping, UI, and handoff remain
+deferred; no general media deduplication or network behavior was added.
 
 ## Remaining deeper sources
 

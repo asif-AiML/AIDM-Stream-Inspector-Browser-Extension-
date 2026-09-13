@@ -36,15 +36,30 @@ function detectTargetTabCandidate(details) {
   );
 }
 
-function formatRequestContext(observedHeaders) {
+function extractRequestContext(observedHeaders) {
   const requestHeaders = Array.isArray(observedHeaders) ? observedHeaders : [];
 
-  return `User-Agent: ${getHeaderValue(requestHeaders, "user-agent")}\n`
-    + `Referer: ${getHeaderValue(requestHeaders, "referer")}\n`
-    + `Origin: ${getHeaderValue(requestHeaders, "origin")}\n`
-    + `Cookie: ${getHeaderPresence(requestHeaders, "cookie")}\n`
-    + `Authorization: ${getHeaderPresence(requestHeaders, "authorization")}\n`
-    + `Range: ${getHeaderValue(requestHeaders, "range")}`;
+  return {
+    userAgent: getHeaderValue(requestHeaders, "user-agent"),
+    referer: getHeaderValue(requestHeaders, "referer"),
+    origin: getHeaderValue(requestHeaders, "origin"),
+    cookie: getHeaderPresence(requestHeaders, "cookie"),
+    authorization: getHeaderPresence(requestHeaders, "authorization"),
+    range: getHeaderValue(requestHeaders, "range")
+  };
+}
+
+function formatObservedRequestContext(context) {
+  return `User-Agent: ${context.userAgent}\n`
+    + `Referer: ${context.referer}\n`
+    + `Origin: ${context.origin}\n`
+    + `Cookie: ${context.cookie}\n`
+    + `Authorization: ${context.authorization}\n`
+    + `Range: ${context.range}`;
+}
+
+function formatRequestContext(observedHeaders) {
+  return formatObservedRequestContext(extractRequestContext(observedHeaders));
 }
 
 function getPriorityLabel(score) {
@@ -103,5 +118,7 @@ function startNetworkObserver() {
   globalThis.startSubtitleEvidenceObserver(requestFilter);
 }
 
+globalThis.extractRequestContext = extractRequestContext;
+globalThis.formatObservedRequestContext = formatObservedRequestContext;
 globalThis.formatRequestContext = formatRequestContext;
 globalThis.startNetworkObserver = startNetworkObserver;

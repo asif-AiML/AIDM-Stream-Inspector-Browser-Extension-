@@ -14,6 +14,8 @@ function setCurrentTargetTabId(tabId) {
   }
 
   currentTargetTabId = nextTargetTabId;
+  // Initial target discovery can run before the subtitle module has loaded.
+  globalThis.resetSubtitleCandidates?.();
 
   if (currentTargetTabId === null) {
     console.log("[AIDM Target] Active target tab unavailable.");

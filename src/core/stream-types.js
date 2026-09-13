@@ -10,5 +10,6 @@ globalThis.AIDM_SUBTITLE_FORMATS = Object.freeze({
   SRT: "SRT",
   VTT: "VTT",
   ASS: "ASS",
-  SSA: "SSA"
+  SSA: "SSA",
+  TTML: "TTML"
 });

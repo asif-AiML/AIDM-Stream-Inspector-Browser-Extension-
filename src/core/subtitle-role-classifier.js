@@ -13,7 +13,9 @@ function classifySubtitleRole(candidateEvidence) {
       role: roles.SUBTITLE,
       evidence: [{
         code: "subtitle-format",
-        reason: "Subtitle-specific format extension; likely subtitle, contents unverified"
+        reason: candidateEvidence.source === "response MIME"
+          ? "Subtitle-specific MIME format; likely subtitle, contents unverified"
+          : "Subtitle-specific format extension; likely subtitle, contents unverified"
       }]
     };
   }
@@ -21,7 +23,8 @@ function classifySubtitleRole(candidateEvidence) {
   if (candidateEvidence.format === formats.VTT) {
     const pathParts = candidateEvidence.pathname.toLowerCase().split("/");
     const filename = pathParts.pop();
-    const stem = filename.slice(0, -".vtt".length);
+    // MIME-discovered VTT paths need not have a .vtt suffix.
+    const stem = filename.endsWith(".vtt") ? filename.slice(0, -".vtt".length) : filename;
 
     // A specific preview filename outweighs a general subtitle directory clue.
     // Inspect only the detector-selected path, without decoding it again.
