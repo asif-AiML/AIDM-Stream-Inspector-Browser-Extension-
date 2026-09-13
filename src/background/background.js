@@ -121,8 +121,10 @@ if (typeof importScripts === "function") {
       loadBackgroundPageScript("src/core/candidate-ranker.js", () => {
         loadBackgroundPageScript("src/core/subtitle-role-classifier.js", () => {
           loadBackgroundPageScript("src/background/subtitle-evidence-observer.js", () => {
-            globalThis.startNetworkObserver();
-            loadBackgroundPageScript("src/background/playback-title.js", () => {});
+            // Install the title gate before the first candidate can arrive.
+            loadBackgroundPageScript("src/background/playback-title.js", () => {
+              globalThis.startNetworkObserver();
+            });
           });
         });
       });

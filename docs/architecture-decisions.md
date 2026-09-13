@@ -212,6 +212,9 @@ If future development begins treating the M4 extension list as the complete dete
 
 ## AD-012 — M8 canonical playback title evidence
 
+M8.1's playback gate and emission/reset rules in AD-013 below supersede this
+initial milestone's unconditional title promotion. Source selection is unchanged.
+
 M8 adds title discovery as a separate page/background layer. It does not derive
 names from media/subtitle URLs or modify those candidate models. The selected
 title is a page-level hypothesis for the current target tab, not proof of a
@@ -359,3 +362,107 @@ M9 can consume this single current title state and its provenance for UI. Title
 editing, final selection UI, media/subtitle association, filename generation,
 JSON-LD, embedded-document inspection, persistence, and AiDM handoff remain
 separate future work. M9 is not implemented here.
+
+## AD-013 — M8.1 playback title gating and duplicate suppression
+
+Title collection and promotion are separate. The existing M4/M4.1 detector still
+classifies requests, M6 still ranks/logs media, and then `network-observer.js`
+passes the detected candidate type and tab ID to `observePlaybackMedia()` in
+`src/background/playback-title.js`. There is no second detector or media store.
+
+The gate opens on **HLS, DASH, or DIRECT_VIDEO (VIDEO)** for the current target.
+All scores qualify, including a direct MP4 at LOW/30. Audio-only, subtitle-only,
+and MIME subtitle diagnostics do not open it. This is evidence of a detected
+media candidate, not confirmation of successful playback or ownership by a
+particular movie. A homepage trailer, video ad, or detected fragment can qualify;
+identifying the intended main asset remains outside this milestone.
+
+`currentTitleEvidence` retains the bounded M8 selection and alternate evidence
+even before media. `currentPlaybackTitle` stays null until the gate opens and a
+usable title exists. The first qualifying media observation immediately promotes
+the cached selection, then requests one fresh top-level metadata snapshot. Media
+arriving before metadata waits for the snapshot callback. Repeated media requests
+do not initiate repeated title reads. Existing document/metadata updates continue
+to refresh evidence before and after promotion, using the unchanged M8 priorities.
+
+Full-log identity is `JSON.stringify([tabId, selectedTitle])` within the current
+target/navigation window. Source, strength, and alternate evidence update
+internally without another full block when the selected title string is unchanged.
+A changed title logs once. Empty evidence clears the promoted value without
+inventing a title; loss/recovery of metadata does not erase the last emitted title
+key. The missing-receiver diagnostic is emitted at most once per window and only
+after media evidence exists. There are no ignored-page diagnostics.
+
+### Reset and browser lifecycle
+
+- The existing target-change hook clears the gate, evidence, promoted title, and
+  log history, including when the target becomes unavailable. Returning to a
+  previously selected tab requires fresh qualifying traffic. There is no cross-tab
+  candidate cache or playback-session inference.
+- The existing `tabs.onUpdated` listener clears these values on `loading` or URL
+  changes, invalidates older asynchronous reads, and recollects on completion or
+  URL/title updates. Metadata-only title changes preserve the gate. URL changes
+  observed first in a validated metadata snapshot also clear the previous gate.
+  Same-URL reloads reset, and same-document URL changes conservatively reset too.
+- Movie A → homepage therefore loses Movie A's gate; Movie B must supply new media
+  evidence. A same-document playback change that alters neither URL nor navigation
+  status has no explicit asset boundary in these APIs. Its changed metadata can
+  update the title, but this milestone does not infer when playback stopped.
+- Navigation properties may arrive in multiple events. A later reset can require
+  another candidate even if one was observed earlier in loading. Do not recover
+  old gates by guessing that two pages belong to the same playback.
+- Target/frame checks, current tab URL validation, and request-version checks
+  remain in place. No iframe document inspection is added. Missing host access or
+  content-script receivers still prevents title collection.
+- Firefox now loads the title coordinator before starting the network observer,
+  matching Chromium's existing ordering, so the gate hook exists for the first
+  observed candidate. Subtitle listener behavior/reset rules remain unchanged.
+- State holds one target's bounded snapshot, a boolean gate, and scalar log/read
+  bookkeeping. No maps, persistent storage, permissions, or network requests were
+  added. Background restart loses the gate/history in either browser model.
+  Chromium MV3 can therefore require new qualifying traffic and later emit the
+  same title again; already-buffered playback may stay silent until new traffic.
+
+Browser references: [tab update events](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/onUpdated)
+and [Chromium worker lifetime](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle).
+
+### Manual Firefox checks, then Brave/Chromium
+
+1. Reload the extension, open its background console, and reload the test pages
+   so their title content scripts are current. Keep the tested page as target.
+2. **A — homepage:** with no HLS/DASH/video candidate, expect no playback-title
+   output. `currentTitleEvidence` may contain metadata; `currentPlaybackTitle`
+   should be null. Subtitle-only traffic must not qualify it.
+3. **B — movie:** select/start playback. Expect the first qualifying media log
+   followed by the strongest current title once, with M8 source/strength/evidence.
+   Metadata already observed before playback should not need another mutation.
+4. **C — duplicates:** re-observe the same metadata or continue repeated media
+   requests. Expect no duplicate full title block while the selection is unchanged.
+5. **D — improvement:** let the player update metadata, or edit the selected OG
+   title in page DevTools for a controlled check. A different selected title logs
+   once; reassigning the same value stays silent. Changing a weaker document title
+   alone must not beat unchanged OG metadata.
+6. **E/F — tabs:** switch to a non-media documentation tab; expect no playback
+   title. Select another playback tab and start/reload media; only its title can
+   promote. Returning to the first tab requires fresh media after the reset.
+7. **G — MP4:** test direct-video playback without manifests or subtitles. LOW/30
+   still qualifies. Also navigate movie → homepage → another movie: the homepage
+   remains silent without new media, and the second movie must use fresh evidence.
+8. Confirm existing media rankings/context, subtitle roles, URL/MIME consolidation,
+   MIME promotion, and subtitle merge lines remain unchanged. Compare Network for
+   absence of extension-generated requests; manifest permissions are unchanged.
+9. **H — Brave/Chromium:** repeat after reloading the unpacked extension and pages.
+   Close worker inspection, allow idle/restart, then resume/reload playback. The
+   title must wait for fresh qualifying media if in-memory state was lost.
+
+Validation: 26 controlled in-memory cases passed, including gate ordering, title
+selection, duplicate suppression, target/frame isolation, delayed callbacks,
+navigation, missing receivers, and both bootstrap paths. Twenty pre/post media
+and subtitle observations produced identical candidate logs. Syntax passed;
+detector, ranker, request-context extraction, subtitle code, content script, and
+manifest were checked unchanged. No test infrastructure/artifacts were added.
+Actual Firefox and Brave playback tests were not performed by the coding agent.
+
+M9 may later present the gated title and provenance alongside candidates. UI,
+playback grouping, subtitle association, persistence, export, naming, and AiDM
+handoff remain deferred. M9 is not started here.
