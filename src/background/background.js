@@ -16,6 +16,7 @@ function setCurrentTargetTabId(tabId) {
   currentTargetTabId = nextTargetTabId;
   // Initial target discovery can run before the subtitle module has loaded.
   globalThis.resetSubtitleCandidates?.();
+  globalThis.resetPlaybackTitle?.();
 
   if (currentTargetTabId === null) {
     console.log("[AIDM Target] Active target tab unavailable.");
@@ -110,7 +111,8 @@ if (typeof importScripts === "function") {
     "../core/candidate-ranker.js",
     "../core/subtitle-role-classifier.js",
     "subtitle-evidence-observer.js",
-    "network-observer.js"
+    "network-observer.js",
+    "playback-title.js"
   );
   globalThis.startNetworkObserver();
 } else {
@@ -120,6 +122,7 @@ if (typeof importScripts === "function") {
         loadBackgroundPageScript("src/core/subtitle-role-classifier.js", () => {
           loadBackgroundPageScript("src/background/subtitle-evidence-observer.js", () => {
             globalThis.startNetworkObserver();
+            loadBackgroundPageScript("src/background/playback-title.js", () => {});
           });
         });
       });

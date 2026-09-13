@@ -230,8 +230,9 @@ No DOM inspection or iframe traversal is added.
   exposes only permitted requests, may omit some cache-served traffic, and has
   no equivalent body field on this response event. Existing request-header
   exposure/fallback differences remain applicable. No DevTools protocol is used.
-- The repository has no page/content-script bridge. DOM tracks, player state,
-  generated cues, and inline bootstrap configuration are currently unobserved,
+- At M7.2A there was no page/content-script bridge. M8 now adds a title-only
+  bridge (see architecture decision AD-012); DOM tracks, player state,
+  generated cues, and inline bootstrap configuration remain unobserved,
   not proven inaccessible to every possible extension architecture. A later
   scoped content script would need separate frame/permission design; the
   background page's DOM is not the playback page's DOM.
@@ -652,6 +653,11 @@ This does not mean M7/M7.1 must solve association immediately. It is a future ha
 ---
 
 # Canonical title is shared playback metadata
+
+M8 now exposes `currentPlaybackTitle` for the current target tab, with source and
+alternate evidence. See [AD-012](architecture-decisions.md#ad-012--m8-canonical-playback-title-evidence)
+for sources, lifecycle, limits, and manual tests. Candidate association and final
+filename generation remain deferred.
 
 Movie/page title discovery is not merely cosmetic.
 

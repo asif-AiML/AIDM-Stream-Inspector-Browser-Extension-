@@ -208,3 +208,154 @@ The architectural checkpoint is:
 > URL-extension matching is a useful first detector, not the definition of media.
 
 If future development begins treating the M4 extension list as the complete detection model, this decision should be revisited before adding more hardcoded filename rules. The intended direction is layered evidence: obvious URL clues first, then MIME/response evidence, then behavioral/structural relationships, followed by candidate ranking.
+
+
+## AD-012 — M8 canonical playback title evidence
+
+M8 adds title discovery as a separate page/background layer. It does not derive
+names from media/subtitle URLs or modify those candidate models. The selected
+title is a page-level hypothesis for the current target tab, not proof of a
+playback association or an external movie identity.
+
+### Sources and selection
+
+`src/content/playback-title.js` is a read-only content script, registered for
+existing HTTP(S) host scope at `document_idle`, in the default isolated world,
+with `all_frames: false`. Its new `src/content/` directory holds page-context
+code, distinct from the background page and network observer. It reads only:
+
+| Source | Selection priority | Strength |
+| --- | --- | --- |
+| `meta[property="og:title"]` | First | HIGH |
+| `meta[name="twitter:title"]` | Second | HIGH |
+| Exactly one visible `h1` | Third | MEDIUM |
+| `document.title` | Fallback | LOW/FALLBACK |
+| Outer-page `iframe[title]` attributes | Alternate evidence only | SUPPORTING ONLY |
+
+`selectPlaybackTitle()` in `src/background/playback-title.js` implements this
+small ordered model; it does not reuse or change media ranking. The first usable
+value at the highest priority wins. Conflicting alternatives remain in the
+bounded evidence list. Strength describes the source, not verified movie identity;
+structured metadata may be stale, branded, or wrong on a particular page.
+
+Iframe attributes are observable even when the iframe document is cross-origin,
+but there is no evidence that any particular iframe owns playback. They therefore
+cannot override page metadata or become the sole canonical title. The script does
+not enter same-origin or cross-origin iframe documents, inspect player globals,
+or traverse shadow roots. Embedded-document titles and provider-specific metadata
+remain unobserved. JSON-LD inspection is deferred; no general crawler is added.
+
+Empty/whitespace-only values are rejected. Exact `Home`, `Player`, and `Watch`
+values are rejected for heading/document fallback selection, ignoring case.
+Structured metadata can legitimately name a film `Home`, so that exclusion does
+not apply there. The script trims outer whitespace only, retaining punctuation,
+Unicode, spaces, branding, and year text as supplied. It never invents a cleaner
+title or generates a filename. AiDM owns future filesystem sanitization.
+
+### Isolation, lifecycle, and bounded state
+
+The content script announces relevant metadata changes without sending titles
+from background tabs. The background checks the extension sender ID, current
+target tab ID, and top-level frame ID, then requests a fresh snapshot using
+`tabs.sendMessage(..., { frameId: 0 })`. Responses are checked against current tab
+URL and a request version, so delayed responses after target/navigation changes
+cannot normally replace newer state. Browser-provided routing supplies tab/frame
+identity; page fields cannot nominate another tab. A page URL is retained as
+context but is not printed in title logs.
+
+The existing target setter also resets title state. Initial module load and
+subsequent target changes request the current document's metadata; tab navigation,
+URL/title changes, and completion can refresh it. A loading navigation clears the
+selected state and invalidates older requests. The Chromium import path and the
+Firefox background-script loader both load the same new title observer. Media and
+subtitle observers, including their existing reset behavior, remain unchanged.
+
+`currentPlaybackTitle` contains `{ title, source, strength, evidence, tabId,
+frameId: 0, pageUrl }`. It holds only the current selection/snapshot, not a map of
+all visited pages. Repeated canonical title values in the same target selection
+do not produce another full log; changed provenance/alternates still update the
+internal state. A changed title or loss of usable title evidence is logged once.
+Target reset or background restart may log the same title again.
+
+Reads are limited to four tags per metadata source, four iframe attributes, and
+one visible H1 (only examined when there are at most eight H1 elements). Values
+longer than 2048 characters are skipped rather than truncated into a plausible
+name. The background accepts at most 16 evidence items. No state is persisted.
+
+### Dynamic metadata
+
+A filtered `MutationObserver` schedules a coalesced read after 250 ms when title,
+selected meta, H1, or iframe-title evidence may have changed or been removed.
+It also responds to pageshow, popstate, and hashchange. Ordinary unrelated text
+mutations do not cause metadata rescans. Only added/removed subtrees are checked
+for relevant elements; no polling or arbitrary visible-text scraping is used.
+The content script suppresses unchanged snapshots before notifying the background.
+
+History API monkey-patching is not used. Same-document navigation can be refreshed
+through tab URL updates or relevant metadata mutations. Pure CSS visibility
+changes to headings are not independently watched; a later relevant refresh
+rechecks visibility. If the page leaves old OG metadata in place, that higher
+priority evidence can keep winning over a changed document title. This milestone
+does not guess which stale fields a particular SPA intended to replace.
+
+### Permissions and browser boundaries
+
+No entries were added to `permissions` or `host_permissions`. Static content-script
+registration uses the existing HTTP(S) scope; there is no `scripting`, `tabs`,
+`activeTab`, or new host permission. Tab URL access on eligible pages uses the
+existing host access. There are no new fetches, injected page-world scripts, DOM
+mutations, candidate associations, or UI changes.
+
+Both browser families support the shared content-script/message approach. See
+[content-script registration](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/content_scripts)
+and [frame-targeted messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/sendMessage).
+Restricted browser pages, extension pages, and pages without granted host access
+cannot supply this metadata. Already-open pages may need reloading after extension
+reload so the script is present. Missing receivers produce a bounded unavailable
+notice, not a fabricated title. An invalidated old content script stops observing
+and requests a page reload in its console warning. Background restarts lose the
+selection/log history; the current target is queried again when reconstructed.
+
+### Manual Firefox checks, then Brave/Chromium
+
+1. Reload the temporary extension in `about:debugging#/runtime/this-firefox`, open
+   its background console, focus a playback tab, and reload that page. This is
+   necessary to attach the new content script to an already-open document.
+2. **A — structured metadata:** on a page with OG title, expect one
+   `[AIDM Playback Title]` showing that title, source `og:title`, HIGH strength,
+   target tab ID, and top-level frame. Document-title evidence remains listed.
+3. **B/C — fallback/noisy title:** test a page without OG/Twitter metadata. A single
+   visible H1 wins at MEDIUM; otherwise document.title is LOW/FALLBACK. Branding,
+   punctuation, Unicode, and year text must remain as supplied. A page with
+   stronger metadata must select it rather than guess-cleaning the noisy title.
+4. **D — iframe:** inspect a page with a player iframe title attribute. It appears
+   as supporting evidence and cannot override the page title, even if the iframe
+   is cross-origin. No embedded-document title is claimed.
+5. **E — dynamics:** navigate within an SPA, or change its document.title/OG
+   content through the page DevTools for a controlled local check. Expect one
+   new full log when the selected title changes. Reassigning the same title must
+   not add a full log. Removing stronger metadata should reveal the next fallback.
+   Changing document.title alone does not override an unchanged valid OG title.
+6. **F — tabs:** switch between two playback tabs. Each selected title must belong
+   to the current target. Metadata changes in the other tab must not be logged.
+   Navigate quickly and confirm an older page title does not replace the new one.
+7. Confirm HLS/DASH/media rankings, request headers, obvious subtitles, MIME
+   promotion, and subtitle duplicate merge lines behave as before. Network should
+   show no extension-generated replay/fetch requests; the manifest permissions
+   remain unchanged.
+8. **G — Brave:** reload in `brave://extensions` or `chrome://extensions`, reload
+   playback pages, and repeat A–F. Also close worker inspection, allow idle/restart,
+   and resume/switch tabs; a fresh title log after restart is expected. Existing
+   cross-browser manifest warnings remain applicable.
+
+Local validation: 18 controlled selection/DOM/message/lifecycle/bootstrap cases
+passed, including priority, generic/empty values, Unicode, duplicate suppression,
+metadata removal, context invalidation, tab/frame isolation, stale responses, and
+both loading paths. Syntax and unchanged existing media/subtitle JavaScript and
+permission lists were verified. No automation dependency was installed. Actual
+Firefox/Brave playback validation remains pending owner testing.
+
+M9 can consume this single current title state and its provenance for UI. Title
+editing, final selection UI, media/subtitle association, filename generation,
+JSON-LD, embedded-document inspection, persistence, and AiDM handoff remain
+separate future work. M9 is not implemented here.

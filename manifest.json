@@ -5,6 +5,12 @@
   "description": "Browser-side media stream inspector for AIDM.",
   "permissions": ["webRequest"],
   "host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["src/content/playback-title.js"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }],
   "background": {
     "scripts": [
       "src/background/network-observer.js",
