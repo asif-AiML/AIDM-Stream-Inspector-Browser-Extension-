@@ -24,12 +24,12 @@ function mergeSubtitleEvidence(existing, incoming) {
   }
 }
 
-function rememberSubtitleCandidate(candidate) {
+function rememberSubtitleCandidate(candidate, retain = true) {
   // JSON tuple encoding avoids delimiter collisions without normalizing URLs.
   const key = JSON.stringify([candidate.tabId, candidate.url, candidate.format]);
-  let resource = subtitleCandidates.get(key);
+  let resource = retain ? subtitleCandidates.get(key) : null;
   if (!resource) {
-    if (subtitleCandidates.size >= maxSubtitleCandidates) {
+    if (retain && subtitleCandidates.size >= maxSubtitleCandidates) {
       subtitleCandidates.delete(subtitleCandidates.keys().next().value);
       console.log("[AIDM Subtitle] Resource limit reached; oldest candidate released from dedupe state.");
     }
@@ -48,7 +48,7 @@ function rememberSubtitleCandidate(candidate) {
       firstStatus: candidate.response.status,
       latestStatus: candidate.response.status
     };
-    subtitleCandidates.set(key, resource);
+    if (retain) subtitleCandidates.set(key, resource);
   }
 
   resource.observationCount++;
@@ -86,6 +86,7 @@ function rememberSubtitleRequestContext(details, candidateEvidence) {
     ? candidateEvidence : null;
   pendingSubtitleRequestContexts.delete(details.requestId);
   pendingSubtitleRequestContexts.set(details.requestId, {
+    playbackGeneration: globalThis.getPlaybackGeneration(),
     requestId: details.requestId,
     parentFrameId: details.parentFrameId,
     type: details.type,
@@ -249,7 +250,10 @@ function logSubtitleEvidence(details, record, observation, completed = false) {
     return;
   }
 
-  const resource = candidate ? rememberSubtitleCandidate(candidate) : null;
+  // Late/uncorrelated responses remain diagnostic, but must not repopulate a
+  // new playback's store or merge their context into a current logical resource.
+  const retain = record?.playbackGeneration === globalThis.getPlaybackGeneration();
+  const resource = candidate ? rememberSubtitleCandidate(candidate, retain) : null;
   let heading = "[AIDM Subtitle Evidence][MIME]";
   let urlEvidence = "";
   if (candidate) {
@@ -295,6 +299,7 @@ function logSubtitleEvidence(details, record, observation, completed = false) {
   console.log(
     `${heading}\n`
     + (resource ? `Candidate ID: ${resource.id}\nObservations: ${resource.observationCount}\n` : "")
+    + (resource && !retain ? "Playback retention: diagnostic only (request not correlated to current playback)\n" : "")
     + `URL: ${details.url}\n`
     + urlEvidence
     + mimeOutput
@@ -334,3 +339,4 @@ function startSubtitleEvidenceObserver(requestFilter) {
 globalThis.resetSubtitleCandidates = resetSubtitleCandidates;
 globalThis.rememberSubtitleRequestContext = rememberSubtitleRequestContext;
 globalThis.startSubtitleEvidenceObserver = startSubtitleEvidenceObserver;
+globalThis.getSubtitlePlaybackCandidates = () => Array.from(subtitleCandidates.values());

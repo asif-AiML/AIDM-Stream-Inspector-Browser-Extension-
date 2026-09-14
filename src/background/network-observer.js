@@ -21,8 +21,24 @@ function detectTargetTabCandidate(details) {
   }
 
   const ranking = globalThis.rankMediaCandidate(candidateEvidence);
+  const priority = getPriorityLabel(ranking.score);
+  const requestContext = extractRequestContext(details.requestHeaders);
+  globalThis.rememberPlaybackMedia({
+    url: details.url,
+    type: candidateEvidence.type,
+    detection: { pathname: candidateEvidence.pathname, source: candidateEvidence.source },
+    ranking: { ...ranking, priority },
+    requestContext,
+    requestId: details.requestId,
+    tabId: details.tabId,
+    frameId: details.frameId ?? null,
+    parentFrameId: details.parentFrameId ?? null,
+    requestType: details.type ?? null,
+    // Media response metadata is not currently correlated by this pipeline.
+    response: null
+  });
   const candidateHeading = `[AIDM Candidate][${candidateEvidence.type}]`;
-  const rankingOutput = `Priority: ${getPriorityLabel(ranking.score)} (${ranking.score})\n`
+  const rankingOutput = `Priority: ${priority} (${ranking.score})\n`
     + `Ranking path source: ${candidateEvidence.source}\n`
     + `Ranking evidence:\n${ranking.evidence.map((item) =>
       `  ${item.weight >= 0 ? "+" : ""}${item.weight} [${item.code}] ${item.reason}`
@@ -32,7 +48,7 @@ function detectTargetTabCandidate(details) {
     `${candidateHeading}\n`
     + `URL: ${details.url}\n`
     + rankingOutput
-    + formatRequestContext(details.requestHeaders)
+    + formatObservedRequestContext(requestContext)
   );
   globalThis.observePlaybackMedia(details.tabId, candidateEvidence);
 }

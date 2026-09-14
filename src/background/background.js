@@ -14,8 +14,7 @@ function setCurrentTargetTabId(tabId) {
   }
 
   currentTargetTabId = nextTargetTabId;
-  // Initial target discovery can run before the subtitle module has loaded.
-  globalThis.resetSubtitleCandidates?.();
+  // Initial target discovery can run before the intelligence modules load.
   globalThis.resetPlaybackTitle?.();
 
   if (currentTargetTabId === null) {
@@ -106,6 +105,7 @@ initializeTargetTab();
 // Chromium loads only this service worker; Firefox loads both manifest scripts.
 if (typeof importScripts === "function") {
   importScripts(
+    "playback-state.js",
     "../core/stream-types.js",
     "candidate-detector.js",
     "../core/candidate-ranker.js",
@@ -122,8 +122,10 @@ if (typeof importScripts === "function") {
         loadBackgroundPageScript("src/core/subtitle-role-classifier.js", () => {
           loadBackgroundPageScript("src/background/subtitle-evidence-observer.js", () => {
             // Install the title gate before the first candidate can arrive.
-            loadBackgroundPageScript("src/background/playback-title.js", () => {
-              globalThis.startNetworkObserver();
+            loadBackgroundPageScript("src/background/playback-state.js", () => {
+              loadBackgroundPageScript("src/background/playback-title.js", () => {
+                globalThis.startNetworkObserver();
+              });
             });
           });
         });

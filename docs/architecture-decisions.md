@@ -466,3 +466,226 @@ Actual Firefox and Brave playback tests were not performed by the coding agent.
 M9 may later present the gated title and provenance alongside candidates. UI,
 playback grouping, subtitle association, persistence, export, naming, and AiDM
 handoff remain deferred. M9 is not started here.
+
+## AD-014 — M9.0 normalized playback-state bridge
+
+`src/background/playback-state.js` is the single UI-facing read model and snapshot
+API. It retains previously log-only media observations and reads authoritative
+subtitle/title records through small internal accessors. It does not maintain
+second copies of the subtitle store or title selection, consume console output,
+or run detection/classification/ranking again. The popup only requests a snapshot.
+This is an internal development model, not the M10 export/handoff schema.
+
+### Producers and ownership
+
+- `network-observer.js` passes each existing M4/M4.1 media result, its M6 score and
+  evidence, M6.1 priority, and the same request's safe M5 context into
+  `rememberPlaybackMedia()`. Console output remains unchanged. HLS, DASH, VIDEO,
+  and AUDIO observations are retained; no media deduplication is added.
+- `subtitle-evidence-observer.js` still owns its one logical-resource map and the
+  existing URL/MIME candidate builder, role classifier, evidence consolidation,
+  exact-resource key, and observation limits. The coordinator reads its retained
+  resources through `getSubtitlePlaybackCandidates()`. Failed/unpromoted MIME
+  diagnostics do not enter this list. Thumbnail and unknown roles remain explicit.
+- `getPlaybackTitleState()` supplies only the M8.1-promoted title, the current
+  observed top-level page URL, and the existing media-gate boolean. Collection,
+  source priorities, title gating, and duplicate-title rules are unchanged. Raw
+  page-title evidence remains private before promotion. Page URL may be known on
+  a non-playback page; it is null when the title metadata bridge has no snapshot.
+- Request context belongs to each media candidate or subtitle observation, never
+  to a global last-header/session cache. Cookie/Authorization remain `present`
+  or `not observed`. No cookie values, Set-Cookie, or new secret sources are added.
+
+### Exact snapshot structure
+
+The root object returned by `getPlaybackStateSnapshot()` is:
+
+```js
+{
+  generation: Number,
+  tabId: Number | null,
+  pageUrl: String | null,
+  title: null | {
+    title, source, strength, evidence, tabId, frameId: 0, pageUrl
+  },
+  status: {
+    playback: "target-unavailable" | "not-detected" | "detected",
+    mediaAvailable: Boolean,
+    timedTextAvailable: Boolean
+  },
+  media: {
+    bestCandidateId: Number | null,
+    candidates: [MediaObservation],
+    omittedCandidateCount: Number
+  },
+  subtitles: { candidates: [SubtitleResource] }
+}
+```
+
+The notation above describes types, not literal export JSON. Status `detected`
+comes from the existing M8.1 gate; audio-only or subtitle-only observations do not
+open it. `timedTextAvailable` includes likely subtitles, thumbnails, and unknown
+timed text; false means none retained/observed, not proof of absence. No session
+readiness or reproducibility claim is inferred. There is no user-selection state.
+
+Each `MediaObservation` contains:
+
+```js
+{
+  id, url, type,
+  detection: { pathname, source },
+  ranking: { score, evidence, priority },
+  requestContext: { userAgent, referer, origin, cookie, authorization, range },
+  requestId, tabId, frameId, parentFrameId, requestType,
+  response: null
+}
+```
+
+`url` is the exact captured string. `detection.pathname` is classification evidence
+only, including M4.1 embedded paths; it never replaces that URL. Missing M5 values
+retain the existing `not observed` convention. Missing optional media frame/type
+fields are null. Media response metadata is not currently correlated/retained by
+the media pipeline, so `response` is explicitly null, not invented from subtitle
+responses or another request.
+
+Each `SubtitleResource` is the existing logical M7.2B.1 resource:
+
+```js
+{
+  id, tabId, url, format, role, roleEvidence, evidence, discoveries,
+  observationCount, observations, omittedObservationCount,
+  firstStatus, latestStatus
+}
+```
+
+Each entry in `observations` retains the existing M7.2B candidate shape:
+`type`, `format`, detector `pathname`/`source`, exact `url`, `discovery`, `mime`,
+`role`, `roleEvidence`, `evidence`, `requestContext`, `requestId`, `tabId`,
+`frameId`, `parentFrameId`, `requestType`, and
+`response: { status, contentTypes, completed }`. Unavailable optional browser
+fields are omitted during JSON serialization; context is null when unobserved.
+Language and label are not inferred. Use the resource's merged role/evidence for
+presentation; observation roles retain their individual provenance. The first and
+latest request contexts remain attached to those specific observations rather
+than being combined into synthetic headers. MIME confirmation remains in evidence
+and observations even if a later observation lacks MIME.
+
+The coordinator makes a deep JSON copy on every read. Maps, DOM objects, raw
+browser request/header objects, functions, and mutable engine references never
+cross the API. Direct background-console callers also receive an independent copy.
+
+### Best candidate and bounds
+
+Best means the highest already-computed M6 score among retained media. Equal
+scores keep the first observed candidate; there is no new role/type tie-breaker.
+`bestCandidateId` references one entry in `media.candidates`, or null when empty.
+It is an engine default, not a user selection or confirmation of usability.
+
+At most 128 media observations are retained. On overflow, the oldest observation
+other than the current best is released. Thus an early master survives a later
+fragment flood; other recent alternatives remain visible, regardless of score.
+`omittedCandidateCount` reports capacity loss. Console detection is not suppressed.
+Same URL/range repeats still occupy distinct observations with distinct IDs.
+
+Existing subtitle bounds remain 128 resources and 64 detailed observations per
+resource (first plus latest 63), with total/omitted counts. There is one current
+target's state, no browser history or persistent storage.
+
+### Lifecycle and late responses
+
+M8.1's existing `clearPlaybackTitle()` now also calls `resetPlaybackState()`,
+clearing media/subtitle retention and advancing a local generation. It already
+runs on target changes, loading/URL changes, and a changed URL first seen in a
+validated title snapshot. All UI components therefore share the title's reset
+boundary. The old independent target-only subtitle reset is replaced by this
+common hook. This supersedes M7.2B.1's earlier same-tab-navigation retention rule.
+
+Pending subtitle requests record their generation at the observed send event.
+Their existing bounded context map remains responsible for completion/error/
+redirect cleanup. A late response from an earlier generation or one without
+matching send context may still produce its existing diagnostic candidate output,
+with `Playback retention: diagnostic only ...`; it cannot enter or merge into the
+current logical-resource map. This prevents late Movie A responses from restoring
+old URLs or headers after navigation to Movie B. The dedupe key and merge/role
+rules for current correlated observations are unchanged. Uncorrelated fallback
+logs are not resource-deduplicated, because current playback ownership is unknown.
+
+Both bootstrap paths install the coordinator before network observation. Title
+callbacks retain their version/tab/URL guards. Background restart loses media,
+subtitle, generation, title, and emission history; the target is reconstructed,
+and candidate state rebuilds only from fresh observations. A popup request does
+not replay traffic or recover old candidates from browser history. Early startup
+can return an empty/target-unavailable snapshot; reopen after initialization.
+Firefox's asynchronously loaded modules may briefly lack a message receiver.
+
+Existing M8.1 limits remain: a navigation update can reset an early observation;
+same-document playback changes without a URL/loading boundary are not distinct
+assets; title metadata may remain stale; ads/trailers can satisfy the media gate.
+No new playback grouping or document/frame ownership inference is introduced.
+
+### Popup message and developer proof
+
+The minimal action popup is `src/popup/popup.html`. `popup.js` calls:
+
+```js
+chrome.runtime.sendMessage({ type: "AIDM_GET_PLAYBACK_STATE" }, callback);
+```
+
+The background replies synchronously with the snapshot. The handler accepts only
+the extension's own popup URL and extension ID, with no content-script `sender.tab`.
+Page/content-script senders cannot obtain the snapshot through this API. There is
+no push subscription, polling, export, or copy action. Standard callback messaging
+works through the existing shared Firefox/Chromium paths; see
+[runtime.onMessage](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/runtime/onMessage)
+and [Chromium messaging](https://developer.chrome.com/docs/extensions/develop/concepts/messaging).
+
+The developer popup displays status and counts only. `currentPlaybackSnapshot`
+holds its one received snapshot for explicit DevTools inspection; signed URLs and
+request contexts are not automatically rendered or logged. Reopening requests a
+new snapshot. No CSS, media cards, checkboxes, selection, or final UI is implemented.
+The manifest adds only `action.default_popup`; permission/host/content-script and
+background declarations are unchanged.
+
+### Manual tests — Firefox first, then Brave/Chromium
+
+1. Reload the extension and test pages; keep the intended page as the target.
+   Click the extension action. Expect the development bridge's status/counts.
+   Inspect the popup console and evaluate `currentPlaybackSnapshot` for the full
+   response. In the background console, `getPlaybackStateSnapshot()` gives a
+   separate copy. Inspecting/focusing DevTools may affect the existing target
+   policy; refocus playback and reopen the popup when needed.
+2. **A — no media:** use documentation without media. Expect `not-detected`,
+   null title/best ID, and empty lists. A known current page URL is acceptable.
+3. **B/E — HLS/multiple candidates:** start a working player with parent and child
+   playlists, then reopen the popup. Check exact captured URLs, original ranking
+   scores/priorities/evidence, and that the best ID references the highest score.
+   Verify each candidate's own Referer/Origin/User-Agent/Range against Network.
+   LOW direct MP4 also remains retained and qualifies the M8.1 title gate.
+4. **C — subtitles:** enable known VTT/SRT. Confirm logical resources, URL+MIME
+   evidence, and distinct SUBTITLE/THUMBNAIL/UNKNOWN roles. Repeated exact requests
+   increment observation count and retain their IDs/context in one resource.
+5. **D — hidden MIME:** use the validated extensionless VTT endpoint. After a
+   completed 2xx request with matched context, expect its exact outer API URL in
+   the same list with format VTT and `mime-response` discovery. Failed MIME-only
+   responses remain diagnostics, not UI candidates.
+6. **F/G — reset:** navigate Movie A → homepage → Movie B and switch target tabs.
+   Reopen each time. Old media, subtitle resources, title, and headers must not
+   survive. Late old requests must not reappear in the new snapshot. Returning to
+   an earlier target requires fresh observations. Snapshot generation advances.
+7. **H — Brave/Chromium:** reload the unpacked extension and repeat the popup API
+   checks. Close worker inspection, allow idle/restart, then reopen the popup:
+   state may be empty until fresh traffic. No new permissions or active requests
+   should appear. Existing manifest-development warnings remain applicable.
+
+Validation: 34 in-memory cases passed, including both browser bootstrap paths,
+header fallback, popup success/error, restricted message senders, deep snapshot
+isolation, retention limits, MIME/role/dedupe behavior, and late-response/reset
+races. Forty-four pre/post observations produced identical normal media/subtitle/
+title console output. All JavaScript parsed; detection/ranking/role/content-script
+code and permission lists were verified unchanged. Actual Firefox/Brave playback
+and popup testing was not performed by the coding agent. No test dependencies or
+generated test artifacts were added.
+
+M9.1 remains the popup shell milestone. Candidate presentation, user selection,
+quick copy, export, session readiness, YouTube intelligence, and AiDM handoff are
+deferred. No next milestone is implemented here.

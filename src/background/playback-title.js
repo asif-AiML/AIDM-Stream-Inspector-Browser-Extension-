@@ -105,6 +105,7 @@ function observePlaybackMedia(tabId, candidateEvidence) {
 }
 
 function clearPlaybackTitle() {
+  globalThis.resetPlaybackState();
   ++titleRequestVersion;
   hasPlaybackMedia = false;
   currentTitleEvidence = null;
@@ -135,4 +136,9 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 });
 globalThis.resetPlaybackTitle = resetPlaybackTitle;
 globalThis.observePlaybackMedia = observePlaybackMedia;
+globalThis.getPlaybackTitleState = () => ({
+  pageUrl: currentTitleEvidence?.pageUrl ?? null,
+  title: currentPlaybackTitle,
+  hasPlaybackMedia
+});
 refreshPlaybackTitle();
