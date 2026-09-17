@@ -2,11 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>AIDM state bridge</title>
+  <title>AIDM Stream Inspector</title>
+  <link rel="stylesheet" href="popup.css">
   <script src="popup.js" defer></script>
 </head>
 <body>
-  <p>M9.0 development bridge</p>
-  <pre id="state-status">Requesting current state…</pre>
+  <header><h1>AIDM Stream Inspector</h1></header>
+  <main id="popup-content" aria-busy="true">
+    <div id="state-message" role="status">
+      <p id="state-summary">Checking this tab…</p>
+      <p id="state-help" class="secondary" hidden></p>
+    </div>
+    <div id="playback-details" hidden>
+      <h2 id="playback-title" dir="auto"></h2>
+      <section class="source-summary" aria-labelledby="source-heading">
+        <h3 id="source-heading">Source</h3>
+        <p id="source-type"></p>
+      </section>
+      <section aria-labelledby="media-heading">
+        <h3 id="media-heading">Media</h3>
+        <p id="media-summary"></p>
+        <p id="media-priority" class="secondary"></p>
+      </section>
+      <section aria-labelledby="subtitle-heading">
+        <h3 id="subtitle-heading">Subtitles</h3>
+        <p id="subtitle-count"></p>
+        <p id="other-timed-text" class="secondary" hidden></p>
+      </section>
+      <section aria-labelledby="session-heading">
+        <h3 id="session-heading">Session</h3>
+        <dl>
+          <div><dt>Referer</dt><dd id="session-referer"></dd></div>
+          <div><dt>Origin</dt><dd id="session-origin"></dd></div>
+          <div><dt>User-Agent</dt><dd id="session-user-agent"></dd></div>
+        </dl>
+      </section>
+    </div>
+  </main>
 </body>
 </html>
