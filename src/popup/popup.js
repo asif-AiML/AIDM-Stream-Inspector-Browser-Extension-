@@ -109,6 +109,30 @@ function renderMediaCandidates(media, candidates, best) {
   note.textContent = note.hidden ? "" : `${omitted} older ${omitted === 1 ? "observation" : "observations"} omitted`;
 }
 
+function renderSubtitles(subtitleState) {
+  const candidates = Array.isArray(subtitleState?.candidates) ? subtitleState.candidates : [];
+  // The logical resource's engine-assigned role is the only presentation gate.
+  const subtitles = candidates.filter((candidate) => candidate?.role === "SUBTITLE");
+  document.getElementById("subtitle-heading").textContent = subtitles.length > 1
+    ? `Subtitles (${subtitles.length})` : "Subtitles";
+  document.getElementById("subtitle-empty").hidden = subtitles.length > 0;
+  const list = document.getElementById("subtitle-list");
+  list.replaceChildren();
+  list.hidden = subtitles.length === 0;
+  subtitles.forEach((candidate, index) => {
+    const row = document.createElement("li");
+    const label = document.createElement("span");
+    // Language/label metadata is not currently supplied by the engine.
+    label.textContent = `Subtitle ${index + 1}`;
+    const format = document.createElement("span");
+    format.className = "subtitle-format";
+    format.textContent = ["VTT", "SRT", "ASS", "SSA", "TTML"].includes(candidate.format)
+      ? candidate.format : "Unknown format";
+    row.append(label, format);
+    list.append(row);
+  });
+}
+
 function renderPlaybackState(snapshot) {
   const playbackStatus = snapshot?.status?.playback;
   if (playbackStatus === "not-detected") {
@@ -139,15 +163,7 @@ function renderPlaybackState(snapshot) {
   document.getElementById("source-type").textContent = source;
   renderMediaCandidates(snapshot.media, candidates, best);
 
-  const subtitles = Array.isArray(snapshot.subtitles?.candidates) ? snapshot.subtitles.candidates : [];
-  const subtitleCount = subtitles.filter((candidate) => candidate?.role === "SUBTITLE").length;
-  const otherCount = subtitles.filter((candidate) =>
-    candidate?.role === "THUMBNAIL" || candidate?.role === "UNKNOWN"
-  ).length;
-  document.getElementById("subtitle-count").textContent = `${subtitleCount} detected`;
-  document.getElementById("other-timed-text").textContent =
-    `${otherCount} other timed-text ${otherCount === 1 ? "resource" : "resources"}`;
-  document.getElementById("other-timed-text").hidden = otherCount === 0;
+  renderSubtitles(snapshot.subtitles);
 
   const context = best?.requestContext;
   document.getElementById("session-referer").textContent = headerPresence(context?.referer);
