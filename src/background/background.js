@@ -126,10 +126,18 @@ globalThis.getCurrentTargetTabId = getCurrentTargetTabId;
 
 // Register synchronously even in Firefox's asynchronous module-loading path.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "AIDM_GET_PLAYBACK_STATE") return;
+  if (!["AIDM_GET_PLAYBACK_STATE", "AIDM_SET_SELECTED_MEDIA", "AIDM_SET_SELECTED_SUBTITLE"]
+      .includes(message?.type)) return;
   if (sender.id !== chrome.runtime.id || sender.tab
       || sender.url !== chrome.runtime.getURL("src/popup/popup.html")) return;
-  globalThis.playbackReady.then(() => sendResponse(globalThis.getPlaybackStateSnapshot()));
+  globalThis.playbackReady.then(() => {
+    if (message.type === "AIDM_GET_PLAYBACK_STATE") {
+      sendResponse(globalThis.getPlaybackStateSnapshot());
+    } else {
+      const accepted = globalThis.updatePlaybackSelection(message);
+      sendResponse({ accepted, snapshot: globalThis.getPlaybackStateSnapshot() });
+    }
+  });
   return true;
 });
 

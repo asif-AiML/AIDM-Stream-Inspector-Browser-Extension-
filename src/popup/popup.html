@@ -13,6 +13,7 @@
       <p id="state-summary">Checking this tab…</p>
       <p id="state-help" class="secondary" hidden></p>
     </div>
+    <p id="selection-error" class="secondary" role="status" hidden></p>
     <div id="playback-details" hidden>
       <h2 id="playback-title" dir="auto"></h2>
       <p id="capture-age" class="secondary" hidden></p>
@@ -20,7 +21,7 @@
         <h3 id="source-heading">Source</h3>
         <p id="source-type"></p>
       </section>
-      <section aria-labelledby="media-heading">
+      <section aria-labelledby="media-heading" role="radiogroup">
         <h3 id="media-heading">Media</h3>
         <div id="best-media" class="best-media" hidden>
           <p class="best-label">Best candidate</p>
@@ -40,10 +41,12 @@
       </section>
       <section aria-labelledby="session-heading">
         <h3 id="session-heading">Session</h3>
-        <dl>
-          <div><dt>Referer</dt><dd id="session-referer"></dd></div>
-          <div><dt>Origin</dt><dd id="session-origin"></dd></div>
+        <p id="session-unavailable" class="secondary" hidden>Request context not available</p>
+        <dl id="session-context">
           <div><dt>User-Agent</dt><dd id="session-user-agent"></dd></div>
+          <div><dt>Referer</dt><dd id="session-referer"></dd></div>
+          <div><dt>Origin <span class="secondary">(diagnostic)</span></dt><dd id="session-origin"></dd></div>
+          <div><dt>Cookies</dt><dd id="session-cookies"></dd></div>
         </dl>
       </section>
     </div>

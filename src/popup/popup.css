@@ -197,3 +197,17 @@ dd {
   font-size: 12px;
   text-align: right;
 }
+
+.media-choice,
+.subtitle-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.media-choice input,
+.subtitle-choice input {
+  flex-shrink: 0;
+  margin: 0;
+}

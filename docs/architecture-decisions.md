@@ -811,3 +811,51 @@ Manual validation (Firefox first, then Brave/Chromium):
 
 Actual Firefox/Brave manual tests remain pending owner validation. M9.2 candidate
 list presentation/selection, exports, and AiDM integration remain unimplemented.
+
+## AD-016 — M9.6 playback-owned media and subtitle selection
+
+The coordinator now exposes `media.selectedCandidateId` separately from
+`media.bestCandidateId`. `media.selectionOverridden` records whether the user
+explicitly chose a candidate. Until that happens, selection follows the existing
+engine best as observations arrive. An evicted selection falls back to the best
+and resumes default behavior; ranking, retention bounds, and ordering are unchanged.
+
+`subtitles.selectedCandidateIds` contains only logical resources whose current
+engine role is `SUBTITLE`. Eligible resources default selected; newly eligible
+IDs are added without reselecting previously deselected resources. Removed or
+ineligible IDs are pruned. No subtitle detection or deduplication runs in the UI.
+
+Selection travels in the existing normalized session snapshot and is restored
+into the coordinator. A root `playbackId` (random opaque UUID) survives successful
+restoration and changes at every reset, preventing stale popup updates even if
+numeric candidate IDs are reused after a worker restart. Older retained snapshots
+without selection fields acquire the default selection. All existing target,
+navigation, session-storage failure, and bounded retention limitations apply.
+
+The popup-only message bridge accepts two additional narrow messages:
+
+- `AIDM_SET_SELECTED_MEDIA`: `playbackId`, `tabId`, integer `candidateId`.
+- `AIDM_SET_SELECTED_SUBTITLE`: same identity fields plus boolean `selected`.
+
+Subtitle updates affect one ID at a time so a popup's older list cannot deselect
+new arrivals. Both await background initialization, validate current playback and
+candidate identity, and return `{ accepted, snapshot }`. Subtitle updates also
+require the current selectable role. Invalid/stale messages change no selection.
+Existing extension-ID/popup-URL/no-content-script sender checks remain mandatory.
+
+Native labeled radios share one name; subtitle rows use labeled checkboxes.
+The best card remains the engine recommendation when a different radio is checked.
+Acknowledgements refresh authoritative checks while preserving the alternatives'
+expanded state and keyboard focus. Failed updates restore the last snapshot and
+show a small inline error, without exposing raw error details. The M9.5 Session
+summary remains best-candidate context; this milestone adds no handoff or copy.
+
+Controlled tests cover both bootstrap paths, defaults, overrides, subtitle opt-out,
+new arrivals, repeated observations, invalid IDs/roles/senders/playback identities,
+restart restoration, legacy snapshots, eviction fallback, navigation/tab resets,
+and native-control rendering/message/error behavior. Actual Firefox/Brave testing
+remains pending. Manually choose a child playlist and uncheck a real subtitle,
+reopen on the same tab, and check the persisted controls. Repeat after worker
+suspension (not extension reload). Then switch tabs or navigate: old selection
+must disappear and new captures must use defaults. Verify keyboard controls,
+unchanged best labels, and absence of thumbnail/unknown checkboxes.

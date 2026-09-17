@@ -6,6 +6,43 @@ let playbackGeneration = 0;
 let nextPlaybackMediaId = 1;
 let omittedMediaCandidateCount = 0;
 let capturedAt = null;
+let playbackId = crypto.randomUUID();
+let selectedMediaCandidateId = null;
+let mediaSelectionOverridden = false;
+let selectedSubtitleCandidateIds = new Set();
+let knownSubtitleCandidateIds = new Set();
+
+function reconcilePlaybackSelection() {
+  if (!playbackMediaCandidates.some((candidate) => candidate.id === selectedMediaCandidateId)) {
+    mediaSelectionOverridden = false;
+  }
+  if (!mediaSelectionOverridden) selectedMediaCandidateId = findBestPlaybackMedia()?.id ?? null;
+  const eligible = (globalThis.getSubtitlePlaybackCandidates?.() ?? [])
+    .filter((candidate) => candidate.role === "SUBTITLE").map((candidate) => candidate.id);
+  selectedSubtitleCandidateIds = new Set(eligible.filter((id) =>
+    !knownSubtitleCandidateIds.has(id) || selectedSubtitleCandidateIds.has(id)));
+  knownSubtitleCandidateIds = new Set(eligible);
+}
+
+function updatePlaybackSelection(message) {
+  const snapshot = getPlaybackStateSnapshot();
+  if (message.playbackId !== playbackId || message.tabId !== snapshot.tabId
+      || snapshot.status.playback !== "detected") return false;
+  if (message.type === "AIDM_SET_SELECTED_MEDIA") {
+    if (!Number.isInteger(message.candidateId)
+        || !playbackMediaCandidates.some((candidate) => candidate.id === message.candidateId)) return false;
+    selectedMediaCandidateId = message.candidateId;
+    mediaSelectionOverridden = true;
+  } else if (message.type === "AIDM_SET_SELECTED_SUBTITLE") {
+    if (!Number.isInteger(message.candidateId) || typeof message.selected !== "boolean"
+        || !knownSubtitleCandidateIds.has(message.candidateId)) return false;
+    if (message.selected) selectedSubtitleCandidateIds.add(message.candidateId);
+    else selectedSubtitleCandidateIds.delete(message.candidateId);
+  } else return false;
+  playbackStateChanged();
+  return true;
+}
+
 let playbackPageUrl = null;
 let pageIdentityReadPending = false;
 let retentionReady = false;
@@ -112,6 +149,13 @@ async function initializePlaybackRetention() {
       // Observations received while storage was loading belong to this same
       // validated page. Keep them, using the existing bounds and ranking.
       for (const candidate of freshMedia) rememberPlaybackMedia(candidate);
+      playbackId = typeof snapshot.playbackId === "string" ? snapshot.playbackId : playbackId;
+      selectedMediaCandidateId = snapshot.media.selectedCandidateId ?? null;
+      mediaSelectionOverridden = snapshot.media.selectionOverridden === true;
+      knownSubtitleCandidateIds = new Set(snapshot.subtitles.candidates
+        .filter((candidate) => candidate.role === "SUBTITLE").map((candidate) => candidate.id));
+      selectedSubtitleCandidateIds = new Set(snapshot.subtitles.selectedCandidateIds
+        ?? [...knownSubtitleCandidateIds]);
     }
   } catch {
     console.warn("[AIDM Playback] Session restore unavailable; waiting for fresh observations.");
@@ -126,6 +170,11 @@ async function initializePlaybackRetention() {
 
 function resetPlaybackState() {
   playbackGeneration++;
+  playbackId = crypto.randomUUID();
+  selectedMediaCandidateId = null;
+  mediaSelectionOverridden = false;
+  selectedSubtitleCandidateIds.clear();
+  knownSubtitleCandidateIds.clear();
   capturedAt = null;
   playbackPageUrl = null;
   playbackMediaCandidates.length = 0;
@@ -161,12 +210,14 @@ function rememberPlaybackMedia(candidate) {
 }
 
 function getPlaybackStateSnapshot() {
+  reconcilePlaybackSelection();
   const tabId = globalThis.getCurrentTargetTabId();
   const titleState = globalThis.getPlaybackTitleState?.();
   const subtitles = globalThis.getSubtitlePlaybackCandidates?.() ?? [];
   const best = findBestPlaybackMedia();
   const snapshot = {
     generation: playbackGeneration,
+    playbackId,
     capturedAt,
     tabId,
     pageUrl: titleState?.pageUrl ?? playbackPageUrl,
@@ -179,10 +230,12 @@ function getPlaybackStateSnapshot() {
     },
     media: {
       bestCandidateId: best?.id ?? null,
+      selectedCandidateId: selectedMediaCandidateId,
+      selectionOverridden: mediaSelectionOverridden,
       candidates: playbackMediaCandidates,
       omittedCandidateCount: omittedMediaCandidateCount
     },
-    subtitles: { candidates: subtitles }
+    subtitles: { candidates: subtitles, selectedCandidateIds: [...selectedSubtitleCandidateIds] }
   };
   // All producers supply plain, deliberately captured fields. JSON copying also
   // prevents popup/debug callers from mutating nested engine records.
@@ -196,3 +249,5 @@ globalThis.getPlaybackStateSnapshot = getPlaybackStateSnapshot;
 
 globalThis.playbackStateChanged = playbackStateChanged;
 globalThis.initializePlaybackRetention = initializePlaybackRetention;
+
+globalThis.updatePlaybackSelection = updatePlaybackSelection;

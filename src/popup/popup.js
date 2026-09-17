@@ -1,4 +1,29 @@
 let currentPlaybackSnapshot = null;
+let selectionRequestVersion = 0;
+
+function changeSelection(type, candidateId, selected) {
+  const snapshot = currentPlaybackSnapshot;
+  if (!snapshot) return;
+  const version = ++selectionRequestVersion;
+  chrome.runtime.sendMessage({ type, candidateId, selected,
+    playbackId: snapshot.playbackId, tabId: snapshot.tabId }, (response) => {
+    const error = chrome.runtime.lastError;
+    if (version !== selectionRequestVersion) return;
+    const open = document.getElementById("other-media").open;
+    const focusedId = document.activeElement?.id;
+    const next = !error && response?.snapshot ? response.snapshot : currentPlaybackSnapshot;
+    const samePlayback = next.playbackId === currentPlaybackSnapshot.playbackId;
+    renderPlaybackState(next);
+    if (samePlayback) {
+      document.getElementById("other-media").open = open;
+      if (focusedId) document.getElementById(focusedId)?.focus();
+    }
+    const notice = document.getElementById("selection-error");
+    notice.hidden = !error && response?.accepted === true;
+    notice.textContent = notice.hidden ? "" : "Selection could not be saved. Reopen the popup to check the current capture.";
+  });
+}
+
 
 function requestPlaybackState() {
   return new Promise((resolve, reject) => {
@@ -25,6 +50,18 @@ function showPopupMessage(summary, help = "") {
 function headerPresence(value) {
   return typeof value === "string" && value.trim() && value.trim() !== "not observed"
     ? "Captured" : "Not observed";
+}
+
+function renderSessionContext(context) {
+  const hasContext = context !== null && typeof context === "object" && !Array.isArray(context);
+  document.getElementById("session-context").hidden = !hasContext;
+  document.getElementById("session-unavailable").hidden = hasContext;
+  document.getElementById("session-user-agent").textContent = headerPresence(context?.userAgent);
+  document.getElementById("session-referer").textContent = headerPresence(context?.referer);
+  // Origin remains diagnostic-only; it is excluded from the future beta clipboard contract.
+  document.getElementById("session-origin").textContent = headerPresence(context?.origin);
+  document.getElementById("session-cookies").textContent =
+    context?.cookie === "present" ? "Observed" : "Not observed";
 }
 
 function formatCaptureAge(capturedAt) {
@@ -56,12 +93,24 @@ function mediaRoleLabel(candidate) {
   return role ? labels[role.code] : type;
 }
 
-function createMediaRow(candidate, observationNumber) {
+function createMediaRow(candidate, observationNumber, selectedId) {
   const row = document.createElement("div");
   row.className = "media-row";
-  const name = document.createElement("p");
-  name.className = "media-name";
-  name.textContent = mediaRoleLabel(candidate);
+  const name = document.createElement("label");
+  name.className = "media-choice";
+  const radio = document.createElement("input");
+  radio.type = "radio";
+  radio.name = "media-candidate";
+  radio.id = `media-choice-${candidate?.id}`;
+  radio.checked = candidate?.id === selectedId;
+  radio.disabled = !Number.isInteger(candidate?.id);
+  radio.addEventListener("change", () => {
+    if (radio.checked) changeSelection("AIDM_SET_SELECTED_MEDIA", candidate.id);
+  });
+  const description = document.createElement("span");
+  description.className = "media-name";
+  description.textContent = mediaRoleLabel(candidate);
+  name.append(radio, description);
   const priority = document.createElement("span");
   priority.className = "media-priority";
   priority.textContent = ["HIGH", "MEDIUM", "LOW"].includes(candidate?.ranking?.priority)
@@ -81,7 +130,7 @@ function renderMediaCandidates(media, candidates, best) {
   bestRow.replaceChildren();
   bestContainer.hidden = !best;
   document.getElementById("media-unavailable").hidden = !!best;
-  if (best) bestRow.append(createMediaRow(best, candidates.indexOf(best) + 1));
+  if (best) bestRow.append(createMediaRow(best, candidates.indexOf(best) + 1, media?.selectedCandidateId));
 
   const alternatives = candidates.map((candidate, index) => ({ candidate, index }))
     .filter((item) => item.candidate !== best);
@@ -100,7 +149,7 @@ function renderMediaCandidates(media, candidates, best) {
   list.replaceChildren();
   for (const { candidate, index } of alternatives) {
     const item = document.createElement("li");
-    item.append(createMediaRow(candidate, index + 1));
+    item.append(createMediaRow(candidate, index + 1, media?.selectedCandidateId));
     list.append(item);
   }
   const omitted = media?.omittedCandidateCount;
@@ -121,9 +170,19 @@ function renderSubtitles(subtitleState) {
   list.hidden = subtitles.length === 0;
   subtitles.forEach((candidate, index) => {
     const row = document.createElement("li");
-    const label = document.createElement("span");
+    const label = document.createElement("label");
+    label.className = "subtitle-choice";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = `subtitle-choice-${candidate.id}`;
+    checkbox.checked = subtitleState.selectedCandidateIds?.includes(candidate.id) === true;
+    checkbox.disabled = !Number.isInteger(candidate.id);
+    checkbox.addEventListener("change", () =>
+      changeSelection("AIDM_SET_SELECTED_SUBTITLE", candidate.id, checkbox.checked));
+    const name = document.createElement("span");
     // Language/label metadata is not currently supplied by the engine.
-    label.textContent = `Subtitle ${index + 1}`;
+    name.textContent = `Subtitle ${index + 1}`;
+    label.append(checkbox, name);
     const format = document.createElement("span");
     format.className = "subtitle-format";
     format.textContent = ["VTT", "SRT", "ASS", "SSA", "TTML"].includes(candidate.format)
@@ -134,6 +193,7 @@ function renderSubtitles(subtitleState) {
 }
 
 function renderPlaybackState(snapshot) {
+  currentPlaybackSnapshot = snapshot;
   const playbackStatus = snapshot?.status?.playback;
   if (playbackStatus === "not-detected") {
     showPopupMessage("No playback detected on this tab yet.",
@@ -165,10 +225,7 @@ function renderPlaybackState(snapshot) {
 
   renderSubtitles(snapshot.subtitles);
 
-  const context = best?.requestContext;
-  document.getElementById("session-referer").textContent = headerPresence(context?.referer);
-  document.getElementById("session-origin").textContent = headerPresence(context?.origin);
-  document.getElementById("session-user-agent").textContent = headerPresence(context?.userAgent);
+  renderSessionContext(best?.requestContext);
   document.getElementById("state-message").hidden = true;
   document.getElementById("playback-details").hidden = false;
   document.getElementById("popup-content").setAttribute("aria-busy", "false");
