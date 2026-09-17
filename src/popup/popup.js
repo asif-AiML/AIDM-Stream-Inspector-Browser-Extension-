@@ -36,6 +36,79 @@ function formatCaptureAge(capturedAt) {
   return `Captured ${hours} ${hours === 1 ? "hr" : "hrs"} ago`;
 }
 
+function mediaTypeLabel(candidate) {
+  const labels = { HLS: "HLS", DASH: "DASH Manifest", VIDEO: "Direct Video", AUDIO: "Audio" };
+  return candidate && Object.hasOwn(labels, candidate.type) ? labels[candidate.type] : "Unknown media";
+}
+
+function mediaRoleLabel(candidate) {
+  const type = mediaTypeLabel(candidate);
+  if (candidate?.type !== "HLS") return type;
+  const evidence = Array.isArray(candidate.ranking?.evidence) ? candidate.ranking.evidence : [];
+  const labels = {
+    "master-like-name": "HLS · likely master",
+    "playlist-like-path": "HLS · possible parent playlist",
+    "video-rendition-like-name": "HLS · likely video rendition",
+    "audio-rendition-like-name": "HLS · likely audio rendition"
+  };
+  // These are engine evidence labels, not new filename/manifest analysis.
+  const role = evidence.find((item) => item && Object.hasOwn(labels, item.code));
+  return role ? labels[role.code] : type;
+}
+
+function createMediaRow(candidate, observationNumber) {
+  const row = document.createElement("div");
+  row.className = "media-row";
+  const name = document.createElement("p");
+  name.className = "media-name";
+  name.textContent = mediaRoleLabel(candidate);
+  const priority = document.createElement("span");
+  priority.className = "media-priority";
+  priority.textContent = ["HIGH", "MEDIUM", "LOW"].includes(candidate?.ranking?.priority)
+    ? candidate.ranking.priority : "Priority unavailable";
+  const detail = document.createElement("p");
+  detail.className = "secondary";
+  const score = candidate?.ranking?.score;
+  detail.textContent = `Observation ${observationNumber}`
+    + (Number.isFinite(score) ? ` · Score ${score}` : "");
+  row.append(name, priority, detail);
+  return row;
+}
+
+function renderMediaCandidates(media, candidates, best) {
+  const bestContainer = document.getElementById("best-media");
+  const bestRow = document.getElementById("best-media-row");
+  bestRow.replaceChildren();
+  bestContainer.hidden = !best;
+  document.getElementById("media-unavailable").hidden = !!best;
+  if (best) bestRow.append(createMediaRow(best, candidates.indexOf(best) + 1));
+
+  const alternatives = candidates.map((candidate, index) => ({ candidate, index }))
+    .filter((item) => item.candidate !== best);
+  // Sort a separate presentation list by supplied scores; keep ties in observed
+  // order and place missing scores last. Never choose a substitute best candidate.
+  alternatives.sort((a, b) => {
+    const aScore = Number.isFinite(a.candidate?.ranking?.score) ? a.candidate.ranking.score : -Infinity;
+    const bScore = Number.isFinite(b.candidate?.ranking?.score) ? b.candidate.ranking.score : -Infinity;
+    return aScore === bScore ? a.index - b.index : aScore > bScore ? -1 : 1;
+  });
+  const details = document.getElementById("other-media");
+  details.hidden = alternatives.length === 0;
+  details.open = false;
+  document.getElementById("other-media-summary").textContent = `Other detected streams (${alternatives.length})`;
+  const list = document.getElementById("other-media-list");
+  list.replaceChildren();
+  for (const { candidate, index } of alternatives) {
+    const item = document.createElement("li");
+    item.append(createMediaRow(candidate, index + 1));
+    list.append(item);
+  }
+  const omitted = media?.omittedCandidateCount;
+  const note = document.getElementById("media-omitted");
+  note.hidden = !Number.isInteger(omitted) || omitted <= 0;
+  note.textContent = note.hidden ? "" : `${omitted} older ${omitted === 1 ? "observation" : "observations"} omitted`;
+}
+
 function renderPlaybackState(snapshot) {
   const playbackStatus = snapshot?.status?.playback;
   if (playbackStatus === "not-detected") {
@@ -56,10 +129,7 @@ function renderPlaybackState(snapshot) {
   const bestId = snapshot.media?.bestCandidateId;
   // Resolve the engine's choice by identity; never rank or choose a fallback here.
   const best = bestId == null ? null : candidates.find((candidate) => candidate?.id === bestId);
-  const typeLabels = { HLS: "HLS", DASH: "DASH", VIDEO: "Direct Video", AUDIO: "Audio" };
-  const source = best && Object.hasOwn(typeLabels, best.type) ? typeLabels[best.type] : "Unavailable";
-  const priority = ["HIGH", "MEDIUM", "LOW"].includes(best?.ranking?.priority)
-    ? best.ranking.priority : "Not available";
+  const source = best ? mediaTypeLabel(best) : "Unavailable";
   const age = formatCaptureAge(snapshot.capturedAt);
   document.getElementById("capture-age").textContent = age;
   document.getElementById("capture-age").hidden = !age;
@@ -67,9 +137,7 @@ function renderPlaybackState(snapshot) {
   document.getElementById("playback-title").textContent =
     typeof title === "string" && title.trim() ? title : "Playback detected";
   document.getElementById("source-type").textContent = source;
-  document.getElementById("media-summary").textContent = best
-    ? `Best candidate · ${source}` : "Best candidate unavailable";
-  document.getElementById("media-priority").textContent = `Priority: ${priority}`;
+  renderMediaCandidates(snapshot.media, candidates, best);
 
   const subtitles = Array.isArray(snapshot.subtitles?.candidates) ? snapshot.subtitles.candidates : [];
   const subtitleCount = subtitles.filter((candidate) => candidate?.role === "SUBTITLE").length;

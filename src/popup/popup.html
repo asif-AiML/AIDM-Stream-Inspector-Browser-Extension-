@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>AIDM Stream Inspector</title>
+  <title>AiDM Stream Inspector</title>
   <link rel="stylesheet" href="popup.css">
   <script src="popup.js" defer></script>
 </head>
@@ -22,8 +22,16 @@
       </section>
       <section aria-labelledby="media-heading">
         <h3 id="media-heading">Media</h3>
-        <p id="media-summary"></p>
-        <p id="media-priority" class="secondary"></p>
+        <div id="best-media" class="best-media" hidden>
+          <p class="best-label">Best candidate</p>
+          <div id="best-media-row"></div>
+        </div>
+        <p id="media-unavailable" class="secondary" hidden>Best candidate unavailable</p>
+        <details id="other-media" hidden>
+          <summary id="other-media-summary"></summary>
+          <ul id="other-media-list" tabindex="0" aria-label="Other detected streams"></ul>
+        </details>
+        <p id="media-omitted" class="secondary" hidden></p>
       </section>
       <section aria-labelledby="subtitle-heading">
         <h3 id="subtitle-heading">Subtitles</h3>
