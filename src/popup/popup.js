@@ -27,6 +27,15 @@ function headerPresence(value) {
     ? "Captured" : "Not observed";
 }
 
+function formatCaptureAge(capturedAt) {
+  if (!Number.isFinite(capturedAt) || capturedAt <= 0) return "";
+  const minutes = Math.floor(Math.max(0, Date.now() - capturedAt) / 60000);
+  if (minutes < 1) return "Captured just now";
+  if (minutes < 60) return `Captured ${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  return `Captured ${hours} ${hours === 1 ? "hr" : "hrs"} ago`;
+}
+
 function renderPlaybackState(snapshot) {
   const playbackStatus = snapshot?.status?.playback;
   if (playbackStatus === "not-detected") {
@@ -51,6 +60,9 @@ function renderPlaybackState(snapshot) {
   const source = best && Object.hasOwn(typeLabels, best.type) ? typeLabels[best.type] : "Unavailable";
   const priority = ["HIGH", "MEDIUM", "LOW"].includes(best?.ranking?.priority)
     ? best.ranking.priority : "Not available";
+  const age = formatCaptureAge(snapshot.capturedAt);
+  document.getElementById("capture-age").textContent = age;
+  document.getElementById("capture-age").hidden = !age;
   const title = snapshot.title?.title;
   document.getElementById("playback-title").textContent =
     typeof title === "string" && title.trim() ? title : "Playback detected";

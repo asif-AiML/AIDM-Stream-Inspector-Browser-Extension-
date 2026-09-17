@@ -7,7 +7,7 @@
   <script src="popup.js" defer></script>
 </head>
 <body>
-  <header><h1>AIDM Stream Inspector</h1></header>
+  <header><h1>AiDM Stream Inspector</h1></header>
   <main id="popup-content" aria-busy="true">
     <div id="state-message" role="status">
       <p id="state-summary">Checking this tab…</p>
@@ -15,6 +15,7 @@
     </div>
     <div id="playback-details" hidden>
       <h2 id="playback-title" dir="auto"></h2>
+      <p id="capture-age" class="secondary" hidden></p>
       <section class="source-summary" aria-labelledby="source-heading">
         <h3 id="source-heading">Source</h3>
         <p id="source-type"></p>

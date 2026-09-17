@@ -70,6 +70,7 @@ function rememberSubtitleCandidate(candidate, retain = true) {
   if (candidate.role === roles.THUMBNAIL || resource.role === roles.UNKNOWN) {
     resource.role = candidate.role;
   }
+  if (retain) globalThis.playbackStateChanged?.();
   return resource;
 }
 
@@ -340,3 +341,27 @@ globalThis.resetSubtitleCandidates = resetSubtitleCandidates;
 globalThis.rememberSubtitleRequestContext = rememberSubtitleRequestContext;
 globalThis.startSubtitleEvidenceObserver = startSubtitleEvidenceObserver;
 globalThis.getSubtitlePlaybackCandidates = () => Array.from(subtitleCandidates.values());
+
+// Rehydrate the existing dedupe store; never reclassify or replay requests.
+globalThis.restoreSubtitlePlaybackCandidates = (resources) => {
+  const freshResources = Array.from(subtitleCandidates.values());
+  subtitleCandidates.clear();
+  for (const resource of resources.slice(0, maxSubtitleCandidates)) {
+    const key = JSON.stringify([resource.tabId, resource.url, resource.format]);
+    subtitleCandidates.set(key, resource);
+    nextSubtitleCandidateId = Math.max(nextSubtitleCandidateId, resource.id + 1);
+  }
+  for (const fresh of freshResources) {
+    let resource;
+    for (const observation of fresh.observations) resource = rememberSubtitleCandidate(observation);
+    if (!resource) continue;
+    resource.observationCount += fresh.omittedObservationCount;
+    resource.omittedObservationCount += fresh.omittedObservationCount;
+    mergeSubtitleEvidence(resource.evidence, fresh.evidence);
+    mergeSubtitleEvidence(resource.roleEvidence, fresh.roleEvidence);
+    for (const discovery of fresh.discoveries) {
+      if (!resource.discoveries.includes(discovery)) resource.discoveries.push(discovery);
+    }
+    if (fresh.role === globalThis.AIDM_SUBTITLE_ROLES.THUMBNAIL) resource.role = fresh.role;
+  }
+};

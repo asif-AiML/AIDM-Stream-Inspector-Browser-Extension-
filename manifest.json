@@ -3,7 +3,7 @@
   "name": "AIDM Stream Inspector",
   "version": "0.1.0",
   "description": "Browser-side media stream inspector for AIDM.",
-  "permissions": ["webRequest"],
+  "permissions": ["webRequest", "storage"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "action": { "default_popup": "src/popup/popup.html" },
   "content_scripts": [{

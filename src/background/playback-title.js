@@ -68,6 +68,15 @@ function refreshPlaybackTitle() {
 
 function promotePlaybackTitle() {
   if (!hasPlaybackMedia) return;
+  // Persist gate/title changes even when no usable title exists or logging is suppressed.
+  try {
+    promoteCurrentPlaybackTitle();
+  } finally {
+    globalThis.playbackStateChanged();
+  }
+}
+
+function promoteCurrentPlaybackTitle() {
   const tabId = globalThis.getCurrentTargetTabId();
   if (titleMetadataUnavailable && !unavailableNoticeLogged) {
     unavailableNoticeLogged = true;
@@ -134,6 +143,18 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
   }
   if (change.status === "complete" || change.url || change.title) refreshPlaybackTitle();
 });
+globalThis.restorePlaybackTitleState = (snapshot) => {
+  ++titleRequestVersion;
+  hasPlaybackMedia = true;
+  const freshEvidence = currentTitleEvidence?.pageUrl === snapshot.pageUrl ? currentTitleEvidence : null;
+  currentPlaybackTitle = freshEvidence ? (freshEvidence.title ? freshEvidence : null) : snapshot.title;
+  currentTitleEvidence = freshEvidence ?? snapshot.title ?? {
+    title: null, source: null, strength: "UNAVAILABLE", evidence: [],
+    tabId: snapshot.tabId, frameId: 0, pageUrl: snapshot.pageUrl
+  };
+  lastTitleLog = currentPlaybackTitle ? JSON.stringify([snapshot.tabId, currentPlaybackTitle.title]) : "";
+};
+globalThis.refreshPlaybackTitle = refreshPlaybackTitle;
 globalThis.resetPlaybackTitle = resetPlaybackTitle;
 globalThis.observePlaybackMedia = observePlaybackMedia;
 globalThis.getPlaybackTitleState = () => ({

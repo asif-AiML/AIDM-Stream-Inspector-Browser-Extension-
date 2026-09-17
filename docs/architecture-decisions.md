@@ -689,3 +689,125 @@ generated test artifacts were added.
 M9.1 remains the popup shell milestone. Candidate presentation, user selection,
 quick copy, export, session readiness, YouTube intelligence, and AiDM handoff are
 deferred. No next milestone is implemented here.
+
+
+## AD-015 — M9.1.1 current-tab session retention and capture age
+
+This supersedes AD-014's in-memory-only lifetime and synchronous popup reply.
+The product rule is: retain only the current target's capture while staying on
+that tab/page; flush on target loss/change or the existing navigation/SPA reset.
+Returning to a previous tab never restores its old capture. Fresh traffic may
+immediately build a new capture there. This is not a playback-history store.
+
+### Storage and ownership
+
+The existing playback coordinator writes one `chrome.storage.session` key:
+
+```js
+{
+  aidmCurrentPlayback: {
+    version: 1,
+    snapshot: {
+      generation, capturedAt, tabId, pageUrl, title, status, media, subtitles
+    }
+  }
+}
+```
+
+The fields retain AD-014's shapes; `capturedAt` is milliseconds since epoch or
+null before the existing HLS/DASH/VIDEO gate opens. It marks the beginning of the
+capture, not the latest request, popup open, or proof that a URL remains usable.
+Duplicate requests, metadata improvements, and background restoration preserve it.
+A lifecycle reset clears it; the next qualifying capture gets a new timestamp.
+The popup never reads storage and continues requesting `AIDM_GET_PLAYBACK_STATE`.
+
+Session storage requires the new `storage` permission; host permissions are
+unchanged. It remains restricted to trusted extension contexts by default. No
+local/sync storage, secrets beyond the existing snapshot, credentials, history,
+network replay, timers, or expiry decisions are added. Cookie/Authorization remain
+presence flags, and exact URLs are copied without normalization. See
+[MDN session storage](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/storage/session)
+and [Chrome storage](https://developer.chrome.com/docs/extensions/reference/api/storage).
+
+There is still one media store, one subtitle dedupe map, and one title/gate owner.
+Restoration repopulates those existing owners, including candidate IDs and safe
+per-request context. It does not create a competing UI store. Fresh observations
+received while storage loads are merged through the existing bounded retention
+and subtitle evidence/dedupe functions. Pending network requests are not persisted.
+
+### Startup, validation, and flushes
+
+The popup message listener is registered synchronously in `background.js`, before
+Firefox's asynchronous module loading. It keeps the response channel open until
+module startup, target discovery, and the restore attempt finish. Sender checks
+still limit this snapshot API to the extension's popup.
+
+Initial target discovery is distinguished from an actual target transition so it
+does not erase the session copy before validation. Restore requires a supported
+record version, detected playback, valid timestamp and candidate lists belonging
+to the same target, an active/fully loaded tab, and exact equality of stored
+`pageUrl` and the browser's current tab URL. Tab identity or URL unavailable,
+loading, mismatch, or a lifecycle reset during initialization rejects the record.
+Activation/focus/navigation events observed during startup conservatively veto
+restoration; ambiguous startup favors fresh evidence over stale data.
+
+Current page identity normally comes from the title bridge. If metadata is
+unavailable, a generation-guarded `tabs.get` read can supply the current HTTP(S)
+page URL without inventing a title or fetching the page. If identity cannot be
+obtained, the in-memory capture is not retained for restoration.
+
+The existing title reset clears media, subtitle resources, page identity, and
+capture time, and schedules removal of the session key. This includes tab changes,
+target unavailable, same-URL reload, tab URL changes, and SPA URL changes first
+seen by the existing validated title path. Storage writes/removals are serialized
+with only the newest pending snapshot retained, preventing an earlier save from
+overtaking a later flush. Existing limits remain 128 media observations, 128
+subtitle resources, and 64 detailed observations per subtitle resource.
+
+Session storage is not disk-backed playback history and does not intentionally
+survive full browser restart or extension reload/update. Unsupported storage,
+API errors, or quota exhaustion are reported without logging snapshot contents;
+in-memory observation continues, with no permanent-storage fallback. On a failed
+save the coordinator also attempts to remove the older stored copy. Actual
+storage failures cannot guarantee retention/removal. No unlimited-storage
+permission is requested. Existing focus-loss target rules still apply: if the
+browser reports the target unavailable, the capture is flushed even if playback
+continues in the background. Same-document asset changes without an observable
+URL/navigation boundary retain the existing M8.1 limitation.
+
+### Popup and validation
+
+The detected-playback view adds one secondary capture-age line. At popup render:
+under one minute is `Captured just now`, 1–59 minutes is `Captured N min ago`,
+and 60+ minutes uses whole hours (`1 hr`, `2 hrs`). Missing timestamps hide the
+line. No interval, polling, automatic expiry, or validity claim is introduced.
+Existing CSS supplies the styling.
+
+Controlled in-memory tests cover both bootstrap paths, a popup message before
+restore completes, exact same-tab restoration, ID/context/timestamp retention,
+fresh observations during restore, subtitle duplicate merging after restart,
+tab switch/return, focus loss, navigation and SPA resets, startup invalidation,
+write/remove races, absent page metadata, storage failure, and age boundaries.
+These are API mocks, not actual Firefox/Chromium execution.
+
+Manual validation (Firefox first, then Brave/Chromium):
+
+1. Reload the extension once to apply the storage permission, then reload/start
+   a known playback page. Keep that tab selected. Expect the existing title,
+   media/session/subtitle summary and `Captured just now`.
+2. Close/reopen the popup on that same tab, then wait a few minutes and reopen.
+   Expect the same capture and increasing age; no page reload is required.
+3. With background inspection closed, allow/reproduce background suspension and
+   reopen the popup on the same page. Compare `capturedAt` from the popup snapshot
+   before/after: it must be unchanged. Extension reload is not worker suspension
+   and is not a substitute for this test.
+4. Switch to an unrelated tab and reopen: no playback details/age. Return to the
+   old tab: only fresh observations can create a new capture. Inspect the single
+   session key, if desired, without copying/logging its sensitive contents.
+5. Navigate Movie A to another page/Movie B, including same-URL reload and SPA URL
+   changes: no old title/media/subtitles/context may restore.
+6. Confirm subtitle roles/counts, best-candidate priority, and console diagnostics
+   remain unchanged. Repeat in Brave/Chromium. Capture age is informational only.
+
+Actual Firefox/Brave manual tests remain pending owner validation. M9.2 candidate
+list presentation/selection, exports, and AiDM integration remain unimplemented.
