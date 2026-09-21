@@ -13,7 +13,7 @@ function changeSelection(type, candidateId, selected) {
     const focusedId = document.activeElement?.id;
     const next = !error && response?.snapshot ? response.snapshot : currentPlaybackSnapshot;
     const samePlayback = next.playbackId === currentPlaybackSnapshot.playbackId;
-    renderPlaybackState(next);
+    if (!renderPlaybackState(next)) return;
     if (samePlayback) {
       document.getElementById("other-media").open = open;
       if (focusedId) document.getElementById(focusedId)?.focus();
@@ -27,24 +27,66 @@ function changeSelection(type, candidateId, selected) {
 
 function requestPlaybackState() {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: "AIDM_GET_PLAYBACK_STATE" }, (snapshot) => {
-      const error = chrome.runtime.lastError;
-      if (error || !snapshot) {
-        reject(new Error(error?.message ?? "Playback state response unavailable"));
-        return;
-      }
-      resolve(snapshot);
-    });
+    // Bound a stalled initialization/message channel; no retry or visual delay.
+    const deadline = setTimeout(() => reject(new Error("Playback request timed out")), 15000);
+    try {
+      chrome.runtime.sendMessage({ type: "AIDM_GET_PLAYBACK_STATE" }, (snapshot) => {
+        clearTimeout(deadline);
+        if (chrome.runtime.lastError || !snapshot) {
+          reject(new Error("Playback state response unavailable"));
+          return;
+        }
+        resolve(snapshot);
+      });
+    } catch {
+      clearTimeout(deadline);
+      reject(new Error("Playback state request failed"));
+    }
   });
 }
 
-function showPopupMessage(summary, help = "") {
+function showPopupMessage(summary, help = "", loading = false) {
+  currentPlaybackSnapshot = null;
+  ++selectionRequestVersion; // Ignore late selection replies after leaving playback UI.
   document.getElementById("playback-details").hidden = true;
+  document.getElementById("selection-error").hidden = true;
+  for (const id of ["best-media-row", "other-media-list", "subtitle-list"]) {
+    document.getElementById(id).replaceChildren();
+  }
   document.getElementById("state-message").hidden = false;
   document.getElementById("state-summary").textContent = summary;
   document.getElementById("state-help").textContent = help;
   document.getElementById("state-help").hidden = !help;
-  document.getElementById("popup-content").setAttribute("aria-busy", "false");
+  document.getElementById("popup-content").setAttribute("aria-busy", String(loading));
+}
+
+function renderLoading() {
+  showPopupMessage("Checking this tab…", "", true);
+}
+
+function renderEmpty() {
+  showPopupMessage("No playback detected on this tab yet.",
+    "Start the video, then reopen the extension.");
+}
+
+function renderUnavailable() {
+  showPopupMessage("No active browser tab available.");
+}
+
+function renderError() {
+  showPopupMessage("Unable to read playback state.", "Try reopening the extension.");
+}
+
+function isUsableSnapshot(snapshot) {
+  const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!object(snapshot) || !object(snapshot.status)) return false;
+  const status = snapshot.status.playback;
+  if (status === "not-detected" || status === "target-unavailable") return true;
+  return status === "detected" && object(snapshot.media) && object(snapshot.subtitles)
+    && Array.isArray(snapshot.media.candidates) && snapshot.media.candidates.every(object)
+    && Array.isArray(snapshot.subtitles.candidates) && snapshot.subtitles.candidates.every(object)
+    && (snapshot.subtitles.selectedCandidateIds == null
+      || Array.isArray(snapshot.subtitles.selectedCandidateIds));
 }
 
 function headerPresence(value) {
@@ -193,22 +235,21 @@ function renderSubtitles(subtitleState) {
 }
 
 function renderPlaybackState(snapshot) {
-  currentPlaybackSnapshot = snapshot;
-  const playbackStatus = snapshot?.status?.playback;
-  if (playbackStatus === "not-detected") {
-    showPopupMessage("No playback detected on this tab yet.",
-      "Start the video, then reopen the extension.");
-    return;
+  try {
+    if (!isUsableSnapshot(snapshot)) { renderError(); return false; }
+    if (snapshot.status.playback === "not-detected") { renderEmpty(); return false; }
+    if (snapshot.status.playback === "target-unavailable") { renderUnavailable(); return false; }
+    renderDetectedPlayback(snapshot);
+    return true;
+  } catch {
+    renderError();
+    return false;
   }
-  if (playbackStatus === "target-unavailable") {
-    showPopupMessage("No active browser tab available.");
-    return;
-  }
-  if (playbackStatus !== "detected") {
-    showPopupMessage("Playback state unavailable.", "Reopen the extension to try again.");
-    return;
-  }
+}
 
+function renderDetectedPlayback(snapshot) {
+  currentPlaybackSnapshot = snapshot;
+  document.getElementById("selection-error").hidden = true;
   const candidates = Array.isArray(snapshot.media?.candidates) ? snapshot.media.candidates : [];
   const bestId = snapshot.media?.bestCandidateId;
   // Resolve the engine's choice by identity; never rank or choose a fallback here.
@@ -231,9 +272,5 @@ function renderPlaybackState(snapshot) {
   document.getElementById("popup-content").setAttribute("aria-busy", "false");
 }
 
-requestPlaybackState().then((snapshot) => {
-  currentPlaybackSnapshot = snapshot;
-  renderPlaybackState(snapshot);
-}).catch(() => {
-  showPopupMessage("Couldn’t load playback information.", "Reopen the extension to try again.");
-});
+renderLoading();
+requestPlaybackState().then(renderPlaybackState).catch(renderError);
