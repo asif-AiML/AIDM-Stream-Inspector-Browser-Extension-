@@ -211,3 +211,33 @@ dd {
   flex-shrink: 0;
   margin: 0;
 }
+
+.copy-action {
+  margin-top: 14px;
+}
+
+#copy-playback {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #263c50;
+  border-radius: 6px;
+  background: #263c50;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#copy-playback:hover:not(:disabled) {
+  background: #1b2d3d;
+}
+
+#copy-playback:focus-visible {
+  outline: 2px solid #536b82;
+  outline-offset: 3px;
+}
+
+#copy-playback:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

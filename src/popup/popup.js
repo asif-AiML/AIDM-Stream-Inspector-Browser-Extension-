@@ -1,14 +1,105 @@
 let currentPlaybackSnapshot = null;
 let selectionRequestVersion = 0;
+let selectionPending = false;
+let copyRequestVersion = 0;
+let copyFeedbackTimeout;
+
+function getSelectedMediaCandidate(snapshot) {
+  const id = snapshot?.media?.selectedCandidateId;
+  if (snapshot?.status?.playback !== "detected" || !Number.isInteger(id)
+      || !Array.isArray(snapshot.media.candidates)) return null;
+  const candidate = snapshot.media.candidates.find((item) => item?.id === id);
+  return typeof candidate?.url === "string" && candidate.url.trim() ? candidate : null;
+}
+
+function shellQuote(value) {
+  // Literal line breaks cannot round-trip through both a single-line POSIX
+  // fragment and shlex.split. Refuse unsafe controls instead of rewriting data.
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) {
+    throw new Error("Value cannot be represented in the clipboard fragment");
+  }
+  return "'" + value.replaceAll("'", "'\"'\"'") + "'";
+}
+
+function buildClipboardArguments(snapshot) {
+  const media = getSelectedMediaCandidate(snapshot);
+  if (!media) throw new Error("Selected media unavailable");
+  const args = [];
+  const context = media.requestContext;
+  if (headerPresence(context?.userAgent) === "Captured") {
+    args.push("--user-agent", shellQuote(context.userAgent));
+  }
+  if (headerPresence(context?.referer) === "Captured") {
+    args.push("--referer", shellQuote(context.referer));
+  }
+  const subtitles = snapshot.subtitles?.candidates ?? [];
+  const selectedIds = new Set(snapshot.subtitles?.selectedCandidateIds ?? []);
+  for (const subtitle of subtitles) {
+    if (subtitle.role !== "SUBTITLE" || !selectedIds.has(subtitle.id)) continue;
+    if (typeof subtitle.url !== "string" || !subtitle.url.trim()) {
+      throw new Error("Selected subtitle URL unavailable");
+    }
+    args.push("--subtitle", shellQuote(subtitle.url));
+  }
+  const title = snapshot.title?.title;
+  if (typeof title === "string" && title.trim()) args.push("--title", shellQuote(title));
+  args.push(shellQuote(media.url));
+  return args.join(" ");
+}
+
+function resetCopyAction() {
+  ++copyRequestVersion; // Late clipboard results must not label a newer selection as copied.
+  clearTimeout(copyFeedbackTimeout);
+  const button = document.getElementById("copy-playback");
+  button.hidden = !getSelectedMediaCandidate(currentPlaybackSnapshot);
+  button.disabled = button.hidden || selectionPending;
+  button.textContent = "Copy for AiDM";
+  document.getElementById("copy-error").hidden = true;
+}
+
+async function copyPlayback() {
+  const button = document.getElementById("copy-playback");
+  if (button.disabled || selectionPending || !getSelectedMediaCandidate(currentPlaybackSnapshot)) return;
+  resetCopyAction();
+  const version = copyRequestVersion;
+  const notice = document.getElementById("copy-error");
+  let fragment;
+  try {
+    fragment = buildClipboardArguments(currentPlaybackSnapshot);
+  } catch {
+    notice.textContent = "Cannot copy this capture: a value is missing or contains unsupported control characters.";
+    notice.hidden = false;
+    return;
+  }
+  button.disabled = true;
+  try {
+    // Start the write during the click's user activation; do not await messaging.
+    await navigator.clipboard.writeText(fragment);
+    if (version !== copyRequestVersion) return;
+    button.textContent = "Copied";
+    copyFeedbackTimeout = setTimeout(() => {
+      button.textContent = "Copy for AiDM";
+    }, 2000);
+  } catch {
+    if (version !== copyRequestVersion) return;
+    notice.textContent = "Could not copy. Keep the popup open and try again.";
+    notice.hidden = false;
+  } finally {
+    if (version === copyRequestVersion) button.disabled = false;
+  }
+}
 
 function changeSelection(type, candidateId, selected) {
   const snapshot = currentPlaybackSnapshot;
   if (!snapshot) return;
   const version = ++selectionRequestVersion;
+  selectionPending = true;
+  resetCopyAction();
   chrome.runtime.sendMessage({ type, candidateId, selected,
     playbackId: snapshot.playbackId, tabId: snapshot.tabId }, (response) => {
     const error = chrome.runtime.lastError;
     if (version !== selectionRequestVersion) return;
+    selectionPending = false;
     const open = document.getElementById("other-media").open;
     const focusedId = document.activeElement?.id;
     const next = !error && response?.snapshot ? response.snapshot : currentPlaybackSnapshot;
@@ -47,6 +138,8 @@ function requestPlaybackState() {
 
 function showPopupMessage(summary, help = "", loading = false) {
   currentPlaybackSnapshot = null;
+  selectionPending = false;
+  resetCopyAction();
   ++selectionRequestVersion; // Ignore late selection replies after leaving playback UI.
   document.getElementById("playback-details").hidden = true;
   document.getElementById("selection-error").hidden = true;
@@ -249,6 +342,7 @@ function renderPlaybackState(snapshot) {
 
 function renderDetectedPlayback(snapshot) {
   currentPlaybackSnapshot = snapshot;
+  resetCopyAction();
   document.getElementById("selection-error").hidden = true;
   const candidates = Array.isArray(snapshot.media?.candidates) ? snapshot.media.candidates : [];
   const bestId = snapshot.media?.bestCandidateId;
@@ -272,5 +366,6 @@ function renderDetectedPlayback(snapshot) {
   document.getElementById("popup-content").setAttribute("aria-busy", "false");
 }
 
+document.getElementById("copy-playback").addEventListener("click", copyPlayback);
 renderLoading();
 requestPlaybackState().then(renderPlaybackState).catch(renderError);
