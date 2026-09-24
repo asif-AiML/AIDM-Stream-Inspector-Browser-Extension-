@@ -1070,7 +1070,7 @@ For that reason:
 
 ## Relationship with AiDM
 
-AIDM Stream Inspector and AiDM are separate repositories with separate responsibilities.
+AIDM Stream Inspector and [AiDM](https://github.com/asif-AiML/AiDM) are separate repositories with separate responsibilities.
 
 The extension produces browser-derived playback information.
 
