@@ -1,4 +1,5 @@
 let currentTargetTabId = null;
+// Last relevant normal window; temporary OS focus loss does not relinquish it.
 let focusedNormalWindowId = null;
 let focusUpdateId = 0;
 let resolveTargetReady;
@@ -28,6 +29,7 @@ function setCurrentTargetTabId(tabId, initialDiscovery = false, settled = true) 
     return;
   }
 
+  if (!initialDiscovery) invalidateStartupRetention();
   currentTargetTabId = nextTargetTabId;
   // Initial target discovery can run before the intelligence modules load.
   if (!initialDiscovery) globalThis.resetPlaybackTitle?.();
@@ -54,40 +56,52 @@ function findActiveTabInWindow(windowId, updateId, initialDiscovery) {
 }
 
 function updateFocusedWindow(windowId, initialDiscovery = false) {
-  if (!initialDiscovery) invalidateStartupRetention();
+  // Desktop/system controls and action popups can temporarily take OS focus.
+  // They neither change the selected tab nor cancel an in-flight discovery.
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
   const updateId = ++focusUpdateId;
-
-  focusedNormalWindowId = null;
-  if (!initialDiscovery) setCurrentTargetTabId(null, false, false);
-
-  if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    setCurrentTargetTabId(null);
-    return;
-  }
+  const previousWindowId = focusedNormalWindowId;
+  const generation = globalThis.getPlaybackGeneration?.();
 
   chrome.windows.get(windowId, {}, (browserWindow) => {
-    if (chrome.runtime.lastError || updateId !== focusUpdateId) {
+    const error = chrome.runtime.lastError;
+    if (!error && browserWindow.type === "normal"
+        && previousWindowId !== null && previousWindowId !== windowId) {
+      invalidateStartupRetention();
+      // A quick switch away and back still ends the old capture, even if the
+      // intervening window lookup finishes late. Never clear a newer capture.
+      if (updateId !== focusUpdateId && generation === globalThis.getPlaybackGeneration?.()) {
+        globalThis.resetPlaybackTitle?.();
+      }
+    }
+    if (error || updateId !== focusUpdateId) {
       if (updateId === focusUpdateId) setCurrentTargetTabId(null);
       return;
     }
 
-    if (!browserWindow.focused || browserWindow.type !== "normal") {
-      setCurrentTargetTabId(null);
+    if (browserWindow.type !== "normal") {
+      initializeTargetTab();
       return;
     }
 
+    const discoveringTarget = initialDiscovery || currentTargetTabId === null;
     focusedNormalWindowId = windowId;
-    findActiveTabInWindow(windowId, updateId, initialDiscovery);
+    findActiveTabInWindow(windowId, updateId, discoveringTarget);
   });
 }
 
 function handleTabActivated(activeInfo) {
-  invalidateStartupRetention();
-  if (activeInfo.windowId === focusedNormalWindowId && activeInfo.tabId !== currentTargetTabId) {
-    setCurrentTargetTabId(null, false, false);
-  }
   const updateId = ++focusUpdateId;
 
+  // A real tab switch in the tracked window matters even while it is unfocused.
+  if (activeInfo.windowId === focusedNormalWindowId) {
+    setCurrentTargetTabId(activeInfo.tabId);
+    return;
+  }
+
+  // An activation waking a worker with no established window still vetoes
+  // restoration: it may represent leaving and returning to the retained tab.
+  invalidateStartupRetention();
   chrome.windows.get(activeInfo.windowId, {}, (browserWindow) => {
     if (chrome.runtime.lastError || updateId !== focusUpdateId) {
       if (updateId === focusUpdateId) setCurrentTargetTabId(null);
@@ -95,7 +109,8 @@ function handleTabActivated(activeInfo) {
     }
 
     if (!browserWindow.focused || browserWindow.type !== "normal") {
-      if (currentTargetTabId === null) initializeTargetTab();
+      // Activation in another background window must not steal the target.
+      initializeTargetTab();
       return;
     }
 
@@ -107,18 +122,19 @@ function handleTabActivated(activeInfo) {
 function initializeTargetTab() {
   const initializationUpdateId = focusUpdateId;
 
-  chrome.windows.getAll({ windowTypes: ["normal"] }, (browserWindows) => {
+  // A worker can restart while the browser has no OS focus. Reconstruct from
+  // the last normal browser window, not from the background/popup's own window.
+  chrome.windows.getLastFocused({ windowTypes: ["normal"] }, (browserWindow) => {
     if (chrome.runtime.lastError || initializationUpdateId !== focusUpdateId) {
       if (initializationUpdateId === focusUpdateId) setCurrentTargetTabId(null);
       return;
     }
 
-    const focusedWindow = browserWindows.find((browserWindow) => browserWindow.focused);
-    const focusedWindowId = focusedWindow
-      ? focusedWindow.id
-      : chrome.windows.WINDOW_ID_NONE;
-
-    updateFocusedWindow(focusedWindowId, true);
+    if (!browserWindow || browserWindow.type !== "normal") {
+      setCurrentTargetTabId(null);
+      return;
+    }
+    updateFocusedWindow(browserWindow.id, currentTargetTabId === null);
   });
 }
 
@@ -142,6 +158,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onActivated.addListener(handleTabActivated);
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId !== currentTargetTabId) return;
+  ++focusUpdateId;
+  focusedNormalWindowId = null;
+  setCurrentTargetTabId(null);
+  initializeTargetTab();
+});
 // Catch a navigation that wakes the worker before target/module initialization.
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === "loading" || change.url) invalidateStartupRetention();
