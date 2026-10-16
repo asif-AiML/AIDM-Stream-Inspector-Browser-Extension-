@@ -1,65 +1,59 @@
-# AiDM + Stream Inspector + Psiphon: integration vision
+# Optional Firefox Psiphon integration — Stream Inspector vision
 
-Status: **proposal / architecture only**. Prepared on 2026-10-16. No proxy-control, downloader-routing, or local-controller code has been implemented in this extension branch.
+**Status:** planned / documentation only (2026-10-16). No proxy-switching implementation has been added on this branch.
 
-## Why three independent projects should collaborate
+## Revised cross-project decision
 
-The original inspiration is Windows IDM working with Psiphon: connect Psiphon, then IDM can download an otherwise ISP-blocked media link. On Linux, the independently developed projects can eventually provide an analogous experience:
+**Psiphon-Linux alone** supplies the independent tunnel engine and future standalone GUI. **AiDM will NOT embed Psiphon** or run its own tunnel. Instead it will offer an independent, OFF-by-default, provider-neutral **SOCKS5 special download mode** using yt-dlp for one URL at a time. This supersedes the earlier two-engine idea.
 
-1. **Psiphon-Linux** establishes and manages a local, free public-network tunnel, currently exposing SOCKS5 at `127.0.0.1:1081` and an HTTP proxy at `127.0.0.1:8081`. Its CLI and browser usage have been manually validated; long-duration stability remains unproven.
-2. **AiDM Stream Inspector** observes browser media playback, ranks streams, collects available request-context evidence and hands the selected media/subtitle information to AiDM.
-3. **AiDM** performs downloading using yt-dlp, aria2c and related engines. Eventually it can opt in to Psiphon routing for otherwise inaccessible URLs.
+Proof of concept: with Psiphon-Linux running, `yt-dlp --proxy "socks5h://127.0.0.1:1081" "URL"` completed a download from an ISP-blocked website. This validates one manual yt-dlp proxy test, **not** implementation in AiDM or Stream Inspector.
 
-An ISP-blocked URL that fails in AiDM without Psiphon may work when the relevant downloader engine explicitly uses the Psiphon proxy. This **does not** solve unrelated causes such as expired signed URLs, geo-restrictions, site authentication, missing headers, DRM or incompatible protocols. Each engine's proxy behavior must be validated independently.
+See the [central decision record](https://github.com/asif-AiML/Linux_Mint/blob/master/Architecture/AiDM-Psiphon-Ecosystem.md) and [AiDM special-mode plan](https://github.com/asif-AiML/AiDM/blob/feat/controls-settings/docs/proxy-aware-special-mode.md). This extension document only governs browser-side functionality.
 
-## Long-term architectural boundaries
+## Extension responsibility and boundaries
+
+AiDM Stream Inspector remains a **Firefox + Chromium** media intelligence extension. Its existing passive network observation, ranking, subtitle detection, playback title, request context and clipboard export operate independently of both other applications.
+
+The optional Firefox feature will communicate with **standalone Psiphon-Linux's local controller**, not an AiDM-embedded Psiphon engine. AiDM's proxy-aware mode is separate: Firefox proxy settings do **not** automatically affect downloads initiated by the external AiDM process.
 
 ```text
-Firefox + AiDM Stream Inspector
-   |  detection / media handoff
-   +-----------------------------> AiDM (download engine)
-   |                                 |
-   | optional proxy control          | optional routed download
-   v                                 v
-Local Psiphon controller <------> Psiphon-Linux tunnel / local proxies
+Firefox + Stream Inspector
+       |              |
+       | media handoff | optional Psiphon browser control
+       v              v
+     AiDM         Psiphon-Linux local controller
+       |              |
+       | independent  | owns connection lifecycle
+       | yt-dlp proxy v
+       +----------> local SOCKS5 proxy
 ```
 
-- Do **not** merge the three repositories or embed the Psiphon upstream engine into the extension. Keep each independently useful, testable and replaceable.
-- The local controller owns tunnel lifecycle and connection readiness; the extension never assumes a listening TCP port means an established tunnel.
-- AiDM, not the extension, owns download routing and per-engine proxy support. Browser proxy settings alone cannot route a separate Linux CLI downloader.
-- Define a versioned, minimal integration contract later; do not invent localhost endpoints, native-messaging IDs, authentication tokens or trust assumptions now.
-- Avoid exposing URL tokens, cookies, browsing history or Psiphon session identifiers to an unnecessary local service.
+Transport, authentication, client/controller state semantics, optional permissions and failure recovery remain design questions. Do not invent a localhost service contract before research.
 
-## Firefox-first, Chromium-safe UI design
+## UI behavior (Firefox only)
 
-The existing Stream Inspector works in both Firefox and Chromium derivatives. The new integration must be **Firefox-only** and **off by default**, without reducing detection, ranking, subtitles, title extraction or clipboard export on either engine.
+There are **two distinct controls**:
 
-Proposed controls when supported:
+1. **Enable Psiphon Integration** — persistent preference, initially **OFF**. OFF means no communication, status polling, proxy modification or unnecessary background work. Existing stream detection continues as normal. Enabling the feature does **not** establish a tunnel.
+2. **Connect / Disconnect Psiphon** — only visible when integration is enabled. Requests lifecycle operations from the standalone Psiphon controller, with visible connection status.
 
-**Enable Psiphon Integration** (persistent, initially OFF)
-- OFF: no Psiphon status polling, communication, proxy API calls, or proxy changes. The existing stream-inspection GUI behaves as before. Hide connection controls.
-- ON: explicit opt-in to the local-controller feature. This is **not** the same as turning on a tunnel. Show clear status and a second control.
+Expected behavior:
+- Intentional connect: establish an active tunnel and verify current-session readiness **before** setting Firefox SOCKS5 with remote DNS.
+- Intentional disconnect: gracefully stop the owned tunnel and restore the explicitly agreed previous/direct Firefox proxy policy.
+- Unexpected tunnel crash/loss or lost controller state: do **not** silently return to direct ISP routing. Keep the protected policy and surface a failure/recovery state.
+- Other proxy extensions, pre-existing Firefox settings, browser restarts and extension disable/uninstall must be considered before implementation; no guarantee of a universal kill switch.
 
-**Connect / Disconnect Psiphon** (available only when integration enabled)
-- Connect: request an intentional start, await current-session tunnel readiness, then activate Firefox SOCKS5 with remote DNS.
-- Disconnect: request intentional shutdown, then restore the explicitly agreed previous/direct Firefox proxy policy.
-- Unexpected client crash or upstream tunnel loss: do **not** silently restore direct browsing; retain the protected proxy policy and show a disconnected/recovering/error state.
-- If controller communication disappears or intent is ambiguous, treat it as a failure, not as user permission for direct fallback.
+**Chromium/Brave:** hide or disable the optional Firefox-only feature completely. Never execute unsupported Firefox-specific APIs. Existing capture, selection and export must remain functional; no extra Psiphon runtime dependency.
 
-Firefox may require extension proxy permissions and a supported background messaging bridge; permission availability, conflicts with manual proxy settings, profile preferences, and extension restart behavior must be established before implementation. Do not claim a global kill switch or anonymity.
+## Integration and testing scope
 
-**Chromium/Brave:** present no Psiphon controls; do not call Firefox-only APIs or request browser-family-specific behavior. Existing features must continue unchanged. Feature detection and packaging/manifest compatibility need verification on both engines.
+The first implementation target is standalone Psiphon-Linux with Firefox. The extension should not know or care whether AiDM is installed. User-selected media and available browser context must continue to be exported in the existing form. If the resulting link is blocked without a proxy, AiDM may independently elect its **single-URL yt-dlp special mode**.
 
-## Safety and user control
+- No Psiphon engine inside the extension or AiDM.
+- No browser extension downloading engine.
+- No automatic Psiphon start merely because a video is detected.
+- No system-wide VPN requirement.
+- No Chromium proxy switching in this milestone.
+- No claim that the verified yt-dlp command proves all Stream Inspector handoffs work through SOCKS5.
 
-- New behavior must not silently rewrite an existing proxy setup or lose its previous state. A user may already rely on a separate proxy configuration.
-- A deliberate OFF is different from a crash. This requires explicit controller-side intent, not merely checking whether a process is alive.
-- Permissions should be minimal and requested only as appropriate for this optional capability; feasibility of optional proxy permissions is a research question.
-- The plugin's previous Firefox/Chromium session-capture behavior remains the primary supported product. All changes belong on a separate branch and require regression testing before any merge.
-
-## Source of truth
-
-- Extension repository: `asif-AiML/AIDM-Stream-Inspector-Browser-Extension-`
-- Independent Psiphon repository: `asif-AiML/Psiphon-Linux`
-- Independent AiDM downloader: `asif-AiML/AiDM` (verify exact repository name before producing cross-repo changes)
-- See [inspection and milestones](psiphon-integration-inspection.md) for current code boundaries, outstanding decisions, and acceptance criteria.
+For inspected code entry points and milestone acceptance criteria, see [inspection and milestones](psiphon-integration-inspection.md).
