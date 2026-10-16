@@ -69,8 +69,17 @@ Thus all commits from those four published branches are contained in `main`. Thi
 - **Pass:** reproducible acceptance tests and explicit caveats; merge to `main` only after both browser families pass.
 
 ### Future, separate AiDM milestone
-- AiDM chooses direct vs Psiphon proxy per download; test yt-dlp/aria2c/other engines independently, with browser-captured headers and expiring URLs. No downloader edits in this branch.
+- AiDM implements an OFF-by-default, provider-neutral SOCKS host/port setting and **single-URL special mode**: yt-dlp with `--proxy` even for one direct HTTP/HTTPS link, with browser-captured context where appropriate. No aria2c use in this mode; playlists, bulk, separate subtitle downloading, torrent/magnet and incompatible advanced controls are unavailable. AiDM never embeds, starts or stops a Psiphon engine. No downloader edits in this branch.
 
 ## Rules for development
 
 Preserve the stable `main` and keep this branch isolated. Treat Firefox implementation as optional additive behavior, not a replacement for Stream Inspector. Separate documented intentions from tested results. No Chromium proxy switching, no unconditional global Firefox proxy setting at extension startup, and no unrequested system-wide routing.
+
+
+## Revised ecosystem boundary — 2026-10-16
+
+The old proposal involving **two applications embedding independent Psiphon engines is superseded**. Only the standalone Psiphon-Linux application operates the tunnel and exposes the external SOCKS5 endpoint. Stream Inspector's Firefox-only control talks to the standalone controller, while AiDM can separately use the proxy with a deliberately restricted single-URL yt-dlp special mode. This eliminates the earlier two-process conflict/handover requirement from this feature's scope.
+
+The successful manual yt-dlp test (`--proxy socks5h://127.0.0.1:1081`) with a blocked-site URL is evidence for **future AiDM proxy support**, not proof that Firefox auto-switching or AiDM integration is implemented. Existing Stream Inspector media handoff remains unchanged. Refer to the [central architecture](https://github.com/asif-AiML/Linux_Mint/blob/master/Architecture/AiDM-Psiphon-Ecosystem.md).
+
+P0–P5 extension milestones above remain applicable to the **standalone Psiphon-Linux controller**, without any embedded AiDM Psiphon process.
